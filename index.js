@@ -45,22 +45,24 @@ client.on('interactionCreate', async (interaction) => {
       .limit(1)
       .single();
 
-    if (error || !data) {
+    if (error || !data || !data.qr_image) {
       return interaction.editReply('Chưa có yêu cầu QR. Hãy vào game, tạo QR rồi bấm "Gửi qua Discord".');
     }
 
     const embed = new EmbedBuilder()
       .setTitle('QR Khôi phục tiến trình Justaseed')
-      .setDescription('Quét mã QR hoặc dùng mã văn bản bên dưới để khôi phục.')
+      .setDescription('Quét mã QR này trong game để khôi phục tiến trình.')
       .setColor(0x4fb06f)
       .setImage('attachment://qr.png')
       .setFooter({ text: 'Justaseed' });
 
-    const buffer = Buffer.from(data.qr_image.split(',')[1], 'base64');
+    const base64Data = data.qr_image.includes(',') 
+      ? data.qr_image.split(',')[1] 
+      : data.qr_image;
+    const buffer = Buffer.from(base64Data, 'base64');
     const attachment = new AttachmentBuilder(buffer, { name: 'qr.png' });
 
     await interaction.editReply({
-      content: data.restore_code ? `**Mã khôi phục:**\n\`\`\`\n${data.restore_code}\n\`\`\`` : null,
       embeds: [embed],
       files: [attachment]
     });
