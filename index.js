@@ -25,7 +25,10 @@ client.once('ready', async () => {
   console.log('Bot online: ' + client.user.tag);
   try {
     await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-  } catch (e) { console.error(e); }
+    console.log('Đã đăng ký lệnh /qr');
+  } catch (e) {
+    console.error(e);
+  }
 });
 
 client.on('interactionCreate', async (interaction) => {
@@ -34,7 +37,6 @@ client.on('interactionCreate', async (interaction) => {
   await interaction.deferReply({ ephemeral: true });
 
   try {
-    // Tìm user theo discord id (cần lưu discord_id khi gửi từ game)
     const { data, error } = await supabase
       .from('qr_requests')
       .select('*')
@@ -57,16 +59,15 @@ client.on('interactionCreate', async (interaction) => {
     const buffer = Buffer.from(data.qr_image.split(',')[1], 'base64');
     const attachment = new AttachmentBuilder(buffer, { name: 'qr.png' });
 
-    await interaction.user.send({
+    await interaction.editReply({
+      content: data.restore_code ? `**Mã khôi phục:**\n\`\`\`\n${data.restore_code}\n\`\`\`` : null,
       embeds: [embed],
-      files: [attachment],
-      content: data.restore_code ? `**Mã khôi phục:**\n\`\`\`\n${data.restore_code}\n\`\`\`` : ''
+      files: [attachment]
     });
 
-    await interaction.editReply('Đã gửi QR vào tin nhắn riêng cho bạn!');
   } catch (err) {
     console.error(err);
-    await interaction.editReply('Không gửi được. Hãy kiểm tra quyền nhận DM.');
+    await interaction.editReply('Có lỗi khi gửi QR. Thử lại sau.');
   }
 });
 
