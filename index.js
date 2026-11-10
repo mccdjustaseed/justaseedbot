@@ -1,7 +1,7 @@
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require('discord.js');
 
-const TOKEN = 'DÁN_BOT_TOKEN_CỦA_BẠN';
-const CLIENT_ID = 'DÁN_CLIENT_ID_CỦA_BẠN';
+const TOKEN = process.env.TOKEN;
+const CLIENT_ID = process.env.CLIENT_ID;
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds]
