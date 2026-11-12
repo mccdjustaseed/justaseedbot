@@ -74,50 +74,66 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 client.login(TOKEN);
-const CHANNEL_ID = process.env.CHANNEL_ID; // ID kênh muốn đăng
 
-// Hàm đăng tổng kết
+const { EmbedBuilder, AttachmentBuilder } = require('discord.js');
+// (nếu dùng import: import { EmbedBuilder, AttachmentBuilder } from 'discord.js')
+
+const CHANNEL_ID = process.env.CHANNEL_ID;
+let postingSummaries = false;
+
 async function postDailySummaries() {
-  if (!CHANNEL_ID) return;
-  const channel = await client.channels.fetch(CHANNEL_ID).catch(() => null);
-  if (!channel) return;
+  if (postingSummaries) return;
+  postingSummaries = true;
+  try {
+    if (!CHANNEL_ID) return console.error('Thiếu CHANNEL_ID');
+    const channel = await client.channels.fetch(CHANNEL_ID).catch(e => {
+      console.error('Không fetch được kênh:', e.message); return null;
+    });
+    if (!channel) return;
 
-  const { data } = await supabase
-    .from('daily_summaries')
-    .select('*')
-    .eq('posted', false)
-    .order('created_at', { ascending: true })
-    .limit(5);
+    const { data, error } = await supabase
+      .from('daily_summaries')
+      .select('*')
+      .eq('posted', false)
+      .order('created_at', { ascending: true })
+      .limit(3);
+    if (error) return console.error('Lỗi đọc Supabase:', error.message);
+    if (!data?.length) return;
 
-  if (!data || !data.length) return;
+    for (const row of data) {
+      try {
+        const base64 = row.image.includes(',') ? row.image.split(',')[1] : row.image;
+        const buffer = Buffer.from(base64, 'base64');
+        const attachment = new AttachmentBuilder(buffer, { name: 'summary.png' });
 
-  for (const row of data) {
-    try {
-      const embed = new EmbedBuilder()
-        .setTitle(`Tổng kết ngày thứ ${row.day}`)
-        .setColor(0x4fb06f) // màu xanh lá chủ đạo của game
-        .addFields(
-          { name: 'Tên cửa hàng', value: row.shop_name || 'Tiệm hoa', inline: true },
-          { name: 'Chủ shop', value: row.owner_name || 'Chủ shop', inline: true }
-        )
-        .setImage('attachment://summary.png')
-        .setFooter({ text: 'Justaseed' })
-        .setTimestamp();
+        const embed = new EmbedBuilder()
+          .setTitle(`Tổng kết ngày thứ ${row.day}`)
+          .setColor(0x4fb06f)
+          .addFields(
+            { name: 'Tên cửa hàng', value: String(row.shop_name || 'Tiệm hoa').slice(0, 1024), inline: true },
+            { name: 'Chủ shop', value: String(row.owner_name || 'Chủ shop').slice(0, 1024), inline: true }
+          )
+          .setImage('attachment://summary.png')
+          .setFooter({ text: 'Justaseed' })
+          .setTimestamp();
+        if (row.caption) embed.setDescription(row.caption);
 
-      if (row.caption) embed.setDescription(row.caption);
-
-      const base64 = row.image.includes(',') ? row.image.split(',')[1] : row.image;
-      const buffer = Buffer.from(base64, 'base64');
-      const attachment = new AttachmentBuilder(buffer, { name: 'summary.png' });
-
-      await channel.send({ embeds: [embed], files: [attachment] });
-
-      await supabase.from('daily_summaries').update({ posted: true }).eq('id', row.id);
-    } catch (err) {
-      console.error('Lỗi đăng tổng kết:', err);
+        await channel.send({ embeds: [embed], files: [attachment] });
+        console.log('Đã đăng tổng kết id', row.id);
+      } catch (err) {
+        console.error('Lỗi đăng tổng kết id', row.id, err);
+      } finally {
+        // đánh dấu luôn để dòng lỗi không chặn hàng đợi
+        await supabase.from('daily_summaries').update({ posted: true }).eq('id', row.id);
+      }
     }
+  } finally {
+    postingSummaries = false;
   }
 }
 
-// Gọi mỗi 30 giây
-setInterval(postDailySummaries, 30000);
+// Đặt trong sự kiện ready (discord.js v14: 'ready', v15: 'clientReady')
+client.once('ready', () => {
+  postDailySummaries();
+  setInterval(postDailySummaries, 30000);
+});
