@@ -92,7 +92,7 @@ const {
 } = require('discord.js');
 
 const SUMMARY_CHANNEL_ID = process.env.CHANNEL_ID;
-const GAME_URL = 'https://mccdjustaseed.github.io/Justaseed/#';
+const GAME_URL = 'https://justaseed.xyz/';
 let postingSummaries = false;
 let postingShares = false;
 
