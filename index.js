@@ -180,7 +180,7 @@ async function postDailySummaries() {
         const container = new SummaryContainer();
 
         container.addTextDisplayComponents(
-          new SummaryText().setContent(`## ${EM_FLOWERS} Tổng kết ngày thứ ${row.day} ${EM_FLOWERS}`)
+          new SummaryText().setContent(`### ${EM_FLOWERS} Tổng kết ngày thứ ${row.day} ${EM_FLOWERS}`)
         );
 
         const texts = [
@@ -260,7 +260,7 @@ async function sendWorkshop(channel, row) {
 
   const container = new SummaryContainer();
   container.addTextDisplayComponents(
-    new SummaryText().setContent(`## ${EM_FLOWERS} Workshop: ${clip(p.name, 60)} ${EM_FLOWERS}`)
+    new SummaryText().setContent(`### ${EM_FLOWERS} Workshop: ${clip(p.name, 60)} ${EM_FLOWERS}`)
   );
   container.addSectionComponents(
     new SummarySection()
@@ -273,11 +273,15 @@ async function sendWorkshop(channel, row) {
   );
   addFooter(container, when);
 
+  // Ping thật người làm và người tặng (bỏ trùng, bỏ người đang khoe để khỏi tự ping)
+  const pingIds = [...new Set([p.maker_id, p.gifter_id].filter(isSnow).map(String))]
+    .filter(id => id !== String(row.discord_id));
+
   await channel.send({
     components: [container],
     files,
     flags: SummaryFlags.IsComponentsV2,
-    allowedMentions: { parse: [] },
+    allowedMentions: { parse: [], users: pingIds },
   });
 }
 
@@ -289,7 +293,7 @@ async function sendCard(channel, row) {
 
   const container = new SummaryContainer();
   container.addTextDisplayComponents(
-    new SummaryText().setContent(`## ${EM_FLOWERS} ${player} đã gửi lên một danh thiếp ${EM_FLOWERS}`)
+    new SummaryText().setContent(`### ${EM_FLOWERS} ${player} đã gửi lên một danh thiếp ${EM_FLOWERS}`)
   );
   container.addSeparatorComponents(new SummarySeparator());
   container.addMediaGalleryComponents(
