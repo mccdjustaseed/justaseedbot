@@ -74,3 +74,50 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 client.login(TOKEN);
+const CHANNEL_ID = process.env.CHANNEL_ID; // ID kênh muốn đăng
+
+// Hàm đăng tổng kết
+async function postDailySummaries() {
+  if (!CHANNEL_ID) return;
+  const channel = await client.channels.fetch(CHANNEL_ID).catch(() => null);
+  if (!channel) return;
+
+  const { data } = await supabase
+    .from('daily_summaries')
+    .select('*')
+    .eq('posted', false)
+    .order('created_at', { ascending: true })
+    .limit(5);
+
+  if (!data || !data.length) return;
+
+  for (const row of data) {
+    try {
+      const embed = new EmbedBuilder()
+        .setTitle(`Tổng kết ngày thứ ${row.day}`)
+        .setColor(0x4fb06f) // màu xanh lá chủ đạo của game
+        .addFields(
+          { name: 'Tên cửa hàng', value: row.shop_name || 'Tiệm hoa', inline: true },
+          { name: 'Chủ shop', value: row.owner_name || 'Chủ shop', inline: true }
+        )
+        .setImage('attachment://summary.png')
+        .setFooter({ text: 'Justaseed' })
+        .setTimestamp();
+
+      if (row.caption) embed.setDescription(row.caption);
+
+      const base64 = row.image.includes(',') ? row.image.split(',')[1] : row.image;
+      const buffer = Buffer.from(base64, 'base64');
+      const attachment = new AttachmentBuilder(buffer, { name: 'summary.png' });
+
+      await channel.send({ embeds: [embed], files: [attachment] });
+
+      await supabase.from('daily_summaries').update({ posted: true }).eq('id', row.id);
+    } catch (err) {
+      console.error('Lỗi đăng tổng kết:', err);
+    }
+  }
+}
+
+// Gọi mỗi 30 giây
+setInterval(postDailySummaries, 30000);
