@@ -118,48 +118,55 @@ async function postDailySummaries() {
 
     for (const row of data) {
       try {
-        const base64 = row.image.includes(',') ? row.image.split(',')[1] : row.image;
-        const buffer = Buffer.from(base64, 'base64');
-        const attachment = new SummaryAttachment(buffer, { name: 'summary.png' });
+        const toBuf = (s) => Buffer.from(s.includes(',') ? s.split(',')[1] : s, 'base64');
+
+        const files = [new SummaryAttachment(toBuf(row.image), { name: 'summary.png' })];
+
+        // Avatar + khung trong hồ sơ game (nếu thiếu thì dùng avatar Discord)
+        let avatarUrl;
+        if (row.avatar) {
+          files.push(new SummaryAttachment(toBuf(row.avatar), { name: 'avatar.png' }));
+          avatarUrl = 'attachment://avatar.png';
+        } else {
+          avatarUrl = 'https://cdn.discordapp.com/embed/avatars/0.png';
+          if (row.discord_id && /^\d+$/.test(row.discord_id)) {
+            try {
+              const user = await client.users.fetch(row.discord_id);
+              avatarUrl = user.displayAvatarURL({ size: 256 });
+            } catch (e) { console.error('Không lấy được avatar:', e.message); }
+          }
+        }
 
         const hasId = row.discord_id && /^\d+$/.test(row.discord_id);
         const owner = hasId ? `<@${row.discord_id}>` : String(row.owner_name || 'Chủ shop');
         const shop = String(row.shop_name || 'Tiệm hoa');
         const when = Math.floor(new Date(row.created_at || Date.now()).getTime() / 1000);
 
-        // Avatar Discord của người chơi (GIF nếu là avatar động)
-        let avatarUrl = 'https://cdn.discordapp.com/embed/avatars/0.png';
-        if (hasId) {
-          try {
-            const user = await client.users.fetch(row.discord_id);
-            avatarUrl = user.displayAvatarURL({ size: 256 });
-          } catch (e) {
-            console.error('Không lấy được avatar:', e.message);
-          }
-        }
+        const container = new SummaryContainer();
 
-        // Các dòng chữ trong section (tối đa 3)
-        const texts = [
+        // Dòng tiêu đề: text display riêng
+        container.addTextDisplayComponents(
           new SummaryText().setContent(
             `## ${EM_FLOWERS} Tổng kết ngày thứ ${row.day} ${EM_FLOWERS}`
-          ),
+          )
+        );
+
+        // Section: chữ bên trái, avatar nhỏ bên phải
+        const texts = [
           new SummaryText().setContent(
             `${EM_SUNFLOWER} **Tên cửa hàng:** ${shop}\n${EM_LEAF} **Chủ shop:** ${owner}`.slice(0, 1000)
           ),
         ];
         const caption = String(row.caption || '').trim();
         if (caption) {
-          texts.push(
-            new SummaryText().setContent(`${EM_DECO} ${caption.slice(0, 300)}`)
-          );
+          texts.push(new SummaryText().setContent(`${EM_DECO} ${caption.slice(0, 300)}`));
         }
 
-        const section = new SummarySection()
-          .addTextDisplayComponents(...texts)
-          .setThumbnailAccessory(new SummaryThumb().setURL(avatarUrl));
-
-        const container = new SummaryContainer();
-        container.addSectionComponents(section);
+        container.addSectionComponents(
+          new SummarySection()
+            .addTextDisplayComponents(...texts)
+            .setThumbnailAccessory(new SummaryThumb().setURL(avatarUrl))
+        );
 
         container.addMediaGalleryComponents(
           new SummaryGallery().addItems(
@@ -174,7 +181,7 @@ async function postDailySummaries() {
 
         await channel.send({
           components: [container],
-          files: [attachment],
+          files,
           flags: SummaryFlags.IsComponentsV2,
           allowedMentions: { parse: [] },
         });
