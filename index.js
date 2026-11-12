@@ -75,8 +75,16 @@ client.on('interactionCreate', async (interaction) => {
 
 client.login(TOKEN);
 
-// ===== ĐĂNG ẢNH TỔNG KẾT LÊN DISCORD =====
-const { AttachmentBuilder: SummaryAttachment } = require('discord.js');
+// ===== ĐĂNG ẢNH TỔNG KẾT LÊN DISCORD (LAYOUT) =====
+const {
+  AttachmentBuilder: SummaryAttachment,
+  ContainerBuilder: SummaryContainer,
+  TextDisplayBuilder: SummaryText,
+  MediaGalleryBuilder: SummaryGallery,
+  MediaGalleryItemBuilder: SummaryGalleryItem,
+  SeparatorBuilder: SummarySeparator,
+  MessageFlags: SummaryFlags,
+} = require('discord.js');
 
 const SUMMARY_CHANNEL_ID = process.env.CHANNEL_ID;
 let postingSummaries = false;
@@ -107,19 +115,51 @@ async function postDailySummaries() {
         const buffer = Buffer.from(base64, 'base64');
         const attachment = new SummaryAttachment(buffer, { name: 'summary.png' });
 
-        const embed = new EmbedBuilder()
-          .setTitle(`Tổng kết ngày thứ ${row.day}`)
-          .setColor(/^#[0-9a-f]{6}$/i.test(row.theme_color || '') ? parseInt(row.theme_color.slice(1), 16) : 0x4fb06f)
-          .addFields(
-            { name: 'Tên cửa hàng', value: String(row.shop_name || 'Tiệm hoa').slice(0, 1024), inline: true },
-            { name: 'Chủ shop', value: row.discord_id && /^\d+$/.test(row.discord_id) ? `<@${row.discord_id}>` : String(row.owner_name || 'Chủ shop').slice(0, 1024), inline: true }
-          )
-          .setImage('attachment://summary.png')
-          .setFooter({ text: 'Justaseed' })
-          .setTimestamp();
-        if (row.caption) embed.setDescription(row.caption);
+        const color = /^#[0-9a-f]{6}$/i.test(row.theme_color || '')
+          ? parseInt(row.theme_color.slice(1), 16)
+          : 0x4fb06f;
 
-        await channel.send({ embeds: [embed], files: [attachment] });
+        const owner = row.discord_id && /^\d+$/.test(row.discord_id)
+          ? `<@${row.discord_id}>`
+          : String(row.owner_name || 'Chủ shop');
+        const shop = String(row.shop_name || 'Tiệm hoa');
+        const when = Math.floor(new Date(row.created_at || Date.now()).getTime() / 1000);
+
+        const container = new SummaryContainer().setAccentColor(color);
+
+        container.addTextDisplayComponents(
+          new SummaryText().setContent(`## 🌸 Tổng kết ngày thứ ${row.day}`)
+        );
+
+        if (row.caption) {
+          container.addTextDisplayComponents(
+            new SummaryText().setContent(String(row.caption).slice(0, 500))
+          );
+        }
+
+        container.addTextDisplayComponents(
+          new SummaryText().setContent(
+            `**Tên cửa hàng:** ${shop}\n**Chủ shop:** ${owner}`.slice(0, 1000)
+          )
+        );
+
+        container.addMediaGalleryComponents(
+          new SummaryGallery().addItems(
+            new SummaryGalleryItem().setURL('attachment://summary.png')
+          )
+        );
+
+        container.addSeparatorComponents(new SummarySeparator());
+        container.addTextDisplayComponents(
+          new SummaryText().setContent(`-# Justaseed • <t:${when}:R>`)
+        );
+
+        await channel.send({
+          components: [container],
+          files: [attachment],
+          flags: SummaryFlags.IsComponentsV2,
+          allowedMentions: { parse: [] },
+        });
         console.log('Đã đăng tổng kết id', row.id);
       } catch (err) {
         console.error('Lỗi đăng tổng kết id', row.id, err);
