@@ -80,6 +80,8 @@ const {
   AttachmentBuilder: SummaryAttachment,
   ContainerBuilder: SummaryContainer,
   TextDisplayBuilder: SummaryText,
+  SectionBuilder: SummarySection,
+  ThumbnailBuilder: SummaryThumb,
   MediaGalleryBuilder: SummaryGallery,
   MediaGalleryItemBuilder: SummaryGalleryItem,
   SeparatorBuilder: SummarySeparator,
@@ -88,6 +90,11 @@ const {
 
 const SUMMARY_CHANNEL_ID = process.env.CHANNEL_ID;
 let postingSummaries = false;
+
+const EM_FLOWERS = '<a:tinyyellowflowers:1569016131426066512>';
+const EM_SUNFLOWER = '<:sunflower_art:1569015850617413703>';
+const EM_LEAF = '<a:pixelleaf:1569016035875750028>';
+const EM_DECO = '<:emoji_143:1569013514968760360>';
 
 async function postDailySummaries() {
   console.log('[summary] đang kiểm tra...');
@@ -115,33 +122,44 @@ async function postDailySummaries() {
         const buffer = Buffer.from(base64, 'base64');
         const attachment = new SummaryAttachment(buffer, { name: 'summary.png' });
 
-        const color = /^#[0-9a-f]{6}$/i.test(row.theme_color || '')
-          ? parseInt(row.theme_color.slice(1), 16)
-          : 0x4fb06f;
-
-        const owner = row.discord_id && /^\d+$/.test(row.discord_id)
-          ? `<@${row.discord_id}>`
-          : String(row.owner_name || 'Chủ shop');
+        const hasId = row.discord_id && /^\d+$/.test(row.discord_id);
+        const owner = hasId ? `<@${row.discord_id}>` : String(row.owner_name || 'Chủ shop');
         const shop = String(row.shop_name || 'Tiệm hoa');
         const when = Math.floor(new Date(row.created_at || Date.now()).getTime() / 1000);
 
-        const container = new SummaryContainer().setAccentColor(color);
+        // Avatar Discord của người chơi (GIF nếu là avatar động)
+        let avatarUrl = 'https://cdn.discordapp.com/embed/avatars/0.png';
+        if (hasId) {
+          try {
+            const user = await client.users.fetch(row.discord_id);
+            avatarUrl = user.displayAvatarURL({ size: 256 });
+          } catch (e) {
+            console.error('Không lấy được avatar:', e.message);
+          }
+        }
 
-        container.addTextDisplayComponents(
-          new SummaryText().setContent(`## 🌸 Tổng kết ngày thứ ${row.day}`)
-        );
-
-        if (row.caption) {
-          container.addTextDisplayComponents(
-            new SummaryText().setContent(String(row.caption).slice(0, 500))
+        // Các dòng chữ trong section (tối đa 3)
+        const texts = [
+          new SummaryText().setContent(
+            `## ${EM_FLOWERS} Tổng kết ngày thứ ${row.day} ${EM_FLOWERS}`
+          ),
+          new SummaryText().setContent(
+            `${EM_SUNFLOWER} **Tên cửa hàng:** ${shop}\n${EM_LEAF} **Chủ shop:** ${owner}`.slice(0, 1000)
+          ),
+        ];
+        const caption = String(row.caption || '').trim();
+        if (caption) {
+          texts.push(
+            new SummaryText().setContent(`${EM_DECO} ${caption.slice(0, 300)}`)
           );
         }
 
-        container.addTextDisplayComponents(
-          new SummaryText().setContent(
-            `**Tên cửa hàng:** ${shop}\n**Chủ shop:** ${owner}`.slice(0, 1000)
-          )
-        );
+        const section = new SummarySection()
+          .addTextDisplayComponents(...texts)
+          .setThumbnailAccessory(new SummaryThumb().setURL(avatarUrl));
+
+        const container = new SummaryContainer();
+        container.addSectionComponents(section);
 
         container.addMediaGalleryComponents(
           new SummaryGallery().addItems(
@@ -151,7 +169,7 @@ async function postDailySummaries() {
 
         container.addSeparatorComponents(new SummarySeparator());
         container.addTextDisplayComponents(
-          new SummaryText().setContent(`-# Justaseed • <t:${when}:R>`)
+          new SummaryText().setContent(`-# ${EM_SUNFLOWER} Justaseed • <t:${when}:R>`)
         );
 
         await channel.send({
