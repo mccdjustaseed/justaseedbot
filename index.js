@@ -273,9 +273,9 @@ async function sendWorkshop(channel, row) {
   );
   addFooter(container, when);
 
-  // Ping thật người làm và người tặng (bỏ trùng, bỏ người đang khoe để khỏi tự ping)
-  const pingIds = [...new Set([p.maker_id, p.gifter_id].filter(isSnow).map(String))]
-    .filter(id => id !== String(row.discord_id));
+  // Ping thật người làm và người tặng (bỏ trùng). Chỉ ping được khi payload có Discord ID.
+  const pingIds = [...new Set([p.maker_id, p.gifter_id].filter(isSnow).map(String))];
+  console.log('[workshop] maker_id =', p.maker_id, '| gifter_id =', p.gifter_id, '| ping =', pingIds);
 
   await channel.send({
     components: [container],
