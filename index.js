@@ -133,7 +133,9 @@ async function postDailySummaries() {
 }
 
 // Đặt trong sự kiện ready (discord.js v14: 'ready', v15: 'clientReady')
-client.once('ready', () => {
+console.log('[summary] CHANNEL_ID =', CHANNEL_ID);
+
+setInterval(() => {
+  if (!client.isReady()) return console.log('[summary] bot chưa ready');
   postDailySummaries();
-  setInterval(postDailySummaries, 30000);
-});
+}, 30000);
