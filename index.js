@@ -81,7 +81,8 @@ const { EmbedBuilder, AttachmentBuilder } = require('discord.js');
 const CHANNEL_ID = process.env.CHANNEL_ID;
 let postingSummaries = false;
 
-async function postDailySummaries() {
+async function postDailySummaries() {console.log('[summary] đang kiểm tra...');
+
   if (postingSummaries) return;
   postingSummaries = true;
   try {
