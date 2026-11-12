@@ -109,10 +109,10 @@ async function postDailySummaries() {
 
         const embed = new EmbedBuilder()
           .setTitle(`Tổng kết ngày thứ ${row.day}`)
-          .setColor(0x4fb06f)
+          .setColor(/^#[0-9a-f]{6}$/i.test(row.theme_color || '') ? parseInt(row.theme_color.slice(1), 16) : 0x4fb06f)
           .addFields(
             { name: 'Tên cửa hàng', value: String(row.shop_name || 'Tiệm hoa').slice(0, 1024), inline: true },
-            { name: 'Chủ shop', value: String(row.owner_name || 'Chủ shop').slice(0, 1024), inline: true }
+            { name: 'Chủ shop', value: row.discord_id && /^\d+$/.test(row.discord_id) ? `<@${row.discord_id}>` : String(row.owner_name || 'Chủ shop').slice(0, 1024), inline: true }
           )
           .setImage('attachment://summary.png')
           .setFooter({ text: 'Justaseed' })
