@@ -75,7 +75,7 @@ client.on('interactionCreate', async (interaction) => {
 
 client.login(TOKEN);
 
-// ===== ĐĂNG ẢNH TỔNG KẾT LÊN DISCORD (LAYOUT) =====
+// ===== ĐĂNG TỔNG KẾT / WORKSHOP / DANH THIẾP LÊN DISCORD (LAYOUT) =====
 const {
   AttachmentBuilder: SummaryAttachment,
   ContainerBuilder: SummaryContainer,
@@ -85,26 +85,78 @@ const {
   MediaGalleryBuilder: SummaryGallery,
   MediaGalleryItemBuilder: SummaryGalleryItem,
   SeparatorBuilder: SummarySeparator,
+  ActionRowBuilder: SummaryRow,
+  ButtonBuilder: SummaryButton,
+  ButtonStyle: SummaryButtonStyle,
   MessageFlags: SummaryFlags,
 } = require('discord.js');
 
 const SUMMARY_CHANNEL_ID = process.env.CHANNEL_ID;
+const GAME_URL = 'https://mccdjustaseed.github.io/Justaseed/#';
 let postingSummaries = false;
+let postingShares = false;
 
 const EM_FLOWERS = '<a:tinyyellowflowers:1569016131426066512>';
 const EM_SUNFLOWER = '<:sunflower_art:1569015850617413703>';
 const EM_LEAF = '<a:pixelleaf:1569016035875750028>';
 const EM_DECO = '<:emoji_143:1569013514968760360>';
 
+// ---------- tiện ích dùng chung ----------
+const toBuf = (s) => Buffer.from(String(s).includes(',') ? String(s).split(',')[1] : String(s), 'base64');
+const isSnow = (v) => /^\d{5,25}$/.test(String(v || ''));
+const clip = (v, n) => String(v ?? '').slice(0, n);
+// người có Discord ID -> mention, không có -> in tên thường
+const who = (id, name, fallback) => (isSnow(id) ? `<@${id}>` : clip(name || fallback, 40));
+
+// Nút link mở game
+const linkRow = () =>
+  new SummaryRow().addComponents(
+    new SummaryButton()
+      .setStyle(SummaryButtonStyle.Link)
+      .setLabel('Chơi Justaseed')
+      .setEmoji('🌱')
+      .setURL(GAME_URL)
+  );
+
+// Phần cuối chung: separator + nút link + footer
+function addFooter(container, when) {
+  container.addSeparatorComponents(new SummarySeparator());
+  container.addActionRowComponents(linkRow());
+  container.addTextDisplayComponents(
+    new SummaryText().setContent(`-# ${EM_SUNFLOWER} Justaseed • <t:${when}:R>`)
+  );
+}
+
+// Lấy avatar: ưu tiên ảnh avatar trong game, không có thì dùng avatar Discord
+async function resolveAvatar(row, files) {
+  if (row.avatar) {
+    files.push(new SummaryAttachment(toBuf(row.avatar), { name: 'avatar.png' }));
+    return 'attachment://avatar.png';
+  }
+  let url = 'https://cdn.discordapp.com/embed/avatars/0.png';
+  if (isSnow(row.discord_id)) {
+    try {
+      const user = await client.users.fetch(row.discord_id);
+      url = user.displayAvatarURL({ size: 256 });
+    } catch (e) { console.error('Không lấy được avatar:', e.message); }
+  }
+  return url;
+}
+
+async function getChannel() {
+  if (!SUMMARY_CHANNEL_ID) { console.error('Thiếu CHANNEL_ID'); return null; }
+  return client.channels.fetch(SUMMARY_CHANNEL_ID).catch(e => {
+    console.error('Không fetch được kênh:', e.message); return null;
+  });
+}
+
+// ---------- 1. TỔNG KẾT NGÀY ----------
 async function postDailySummaries() {
   console.log('[summary] đang kiểm tra...');
   if (postingSummaries) return;
   postingSummaries = true;
   try {
-    if (!SUMMARY_CHANNEL_ID) return console.error('Thiếu CHANNEL_ID');
-    const channel = await client.channels.fetch(SUMMARY_CHANNEL_ID).catch(e => {
-      console.error('Không fetch được kênh:', e.message); return null;
-    });
+    const channel = await getChannel();
     if (!channel) return;
 
     const { data, error } = await supabase
@@ -118,49 +170,26 @@ async function postDailySummaries() {
 
     for (const row of data) {
       try {
-        const toBuf = (s) => Buffer.from(s.includes(',') ? s.split(',')[1] : s, 'base64');
-
         const files = [new SummaryAttachment(toBuf(row.image), { name: 'summary.png' })];
+        const avatarUrl = await resolveAvatar(row, files);
 
-        // Avatar + khung trong hồ sơ game (nếu thiếu thì dùng avatar Discord)
-        let avatarUrl;
-        if (row.avatar) {
-          files.push(new SummaryAttachment(toBuf(row.avatar), { name: 'avatar.png' }));
-          avatarUrl = 'attachment://avatar.png';
-        } else {
-          avatarUrl = 'https://cdn.discordapp.com/embed/avatars/0.png';
-          if (row.discord_id && /^\d+$/.test(row.discord_id)) {
-            try {
-              const user = await client.users.fetch(row.discord_id);
-              avatarUrl = user.displayAvatarURL({ size: 256 });
-            } catch (e) { console.error('Không lấy được avatar:', e.message); }
-          }
-        }
-
-        const hasId = row.discord_id && /^\d+$/.test(row.discord_id);
-        const owner = hasId ? `<@${row.discord_id}>` : String(row.owner_name || 'Chủ shop');
-        const shop = String(row.shop_name || 'Tiệm hoa');
+        const owner = isSnow(row.discord_id) ? `<@${row.discord_id}>` : String(row.owner_name || 'Chủ shop');
+        const shop = String(row.shop_name || 'Tiệm hoa'); // tên shop do game gửi (s.name)
         const when = Math.floor(new Date(row.created_at || Date.now()).getTime() / 1000);
 
         const container = new SummaryContainer();
 
-        // Dòng tiêu đề: text display riêng
         container.addTextDisplayComponents(
-          new SummaryText().setContent(
-            `## ${EM_FLOWERS} Tổng kết ngày thứ ${row.day} ${EM_FLOWERS}`
-          )
+          new SummaryText().setContent(`## ${EM_FLOWERS} Tổng kết ngày thứ ${row.day} ${EM_FLOWERS}`)
         );
 
-        // Section: chữ bên trái, avatar nhỏ bên phải
         const texts = [
           new SummaryText().setContent(
             `${EM_SUNFLOWER} **Tên cửa hàng:** ${shop}\n${EM_LEAF} **Chủ shop:** ${owner}`.slice(0, 1000)
           ),
         ];
         const caption = String(row.caption || '').trim();
-        if (caption) {
-          texts.push(new SummaryText().setContent(`${EM_DECO} ${caption.slice(0, 300)}`));
-        }
+        if (caption) texts.push(new SummaryText().setContent(`${EM_DECO} ${caption.slice(0, 300)}`));
 
         container.addSectionComponents(
           new SummarySection()
@@ -168,16 +197,14 @@ async function postDailySummaries() {
             .setThumbnailAccessory(new SummaryThumb().setURL(avatarUrl))
         );
 
+        // Separator dưới section
+        container.addSeparatorComponents(new SummarySeparator());
+
         container.addMediaGalleryComponents(
-          new SummaryGallery().addItems(
-            new SummaryGalleryItem().setURL('attachment://summary.png')
-          )
+          new SummaryGallery().addItems(new SummaryGalleryItem().setURL('attachment://summary.png'))
         );
 
-        container.addSeparatorComponents(new SummarySeparator());
-        container.addTextDisplayComponents(
-          new SummaryText().setContent(`-# ${EM_SUNFLOWER} Justaseed • <t:${when}:R>`)
-        );
+        addFooter(container, when); // separator + nút link + footer
 
         await channel.send({
           components: [container],
@@ -197,10 +224,125 @@ async function postDailySummaries() {
   }
 }
 
+// ---------- 2. VẬT PHẨM WORKSHOP ----------
+async function sendWorkshop(channel, row) {
+  const p = row.payload || {};
+  const files = [new SummaryAttachment(toBuf(row.image), { name: 'workshop.png' })];
+  const avatarUrl = await resolveAvatar(row, files);
+  const when = Math.floor(new Date(row.created_at || Date.now()).getTime() / 1000);
+
+  const q = Math.max(0, Math.min(100, Number(p.quality) || 0));
+  const starN = Math.max(1, Math.min(5, Math.round(q / 20)));
+  const stars = '★'.repeat(starN) + '☆'.repeat(5 - starN);
+  const value = Number(p.value) > 0 ? `${Number(p.value).toLocaleString('vi-VN')}đ` : null;
+
+  const poster = isSnow(row.discord_id) ? `<@${row.discord_id}>` : 'Chủ shop';
+  const maker = who(p.maker_id, p.maker_name, 'Không rõ');
+
+  const lines = [
+    `${EM_SUNFLOWER} **Vật phẩm:** ${clip(p.name, 60)}`,
+    `${EM_LEAF} **Loại:** ${clip(p.emoji, 8)} ${clip(p.type, 30)}`,
+    `${EM_SUNFLOWER} **Chất lượng:** ${q}/100 ${stars}`,
+  ];
+  if (p.materials) lines.push(`${EM_LEAF} **Nguyên liệu:** ${clip(p.materials, 300)}`);
+  if (p.scent) lines.push(`${EM_SUNFLOWER} **Hương:** ${clip(p.scent, 80)}`);
+  if (value) lines.push(`${EM_LEAF} **Giá trị:** ${value}`);
+  lines.push(`${EM_SUNFLOWER} **Người làm:** ${maker}`);
+  if (p.gifter_name || p.gifter_id) {
+    lines.push(`${EM_LEAF} **Người tặng:** ${who(p.gifter_id, p.gifter_name, 'Bạn bè')}`);
+    if (p.gift_msg) lines.push(`${EM_DECO} *“${clip(p.gift_msg, 80)}”*`);
+  }
+  lines.push(`${EM_SUNFLOWER} **Khoe bởi:** ${poster} · ${clip(p.shop_name || 'Tiệm hoa', 60)}`);
+
+  const texts = [new SummaryText().setContent(lines.join('\n').slice(0, 1800))];
+  const caption = String(p.caption || '').trim();
+  if (caption) texts.push(new SummaryText().setContent(`${EM_DECO} ${caption.slice(0, 300)}`));
+
+  const container = new SummaryContainer();
+  container.addTextDisplayComponents(
+    new SummaryText().setContent(`## ${EM_FLOWERS} Workshop: ${clip(p.name, 60)} ${EM_FLOWERS}`)
+  );
+  container.addSectionComponents(
+    new SummarySection()
+      .addTextDisplayComponents(...texts)
+      .setThumbnailAccessory(new SummaryThumb().setURL(avatarUrl))
+  );
+  container.addSeparatorComponents(new SummarySeparator());
+  container.addMediaGalleryComponents(
+    new SummaryGallery().addItems(new SummaryGalleryItem().setURL('attachment://workshop.png'))
+  );
+  addFooter(container, when);
+
+  await channel.send({
+    components: [container],
+    files,
+    flags: SummaryFlags.IsComponentsV2,
+    allowedMentions: { parse: [] },
+  });
+}
+
+// ---------- 3. DANH THIẾP ----------
+async function sendCard(channel, row) {
+  const files = [new SummaryAttachment(toBuf(row.image), { name: 'card.png' })];
+  const when = Math.floor(new Date(row.created_at || Date.now()).getTime() / 1000);
+  const player = isSnow(row.discord_id) ? `<@${row.discord_id}>` : 'Một người chơi';
+
+  const container = new SummaryContainer();
+  container.addTextDisplayComponents(
+    new SummaryText().setContent(`## ${EM_FLOWERS} ${player} đã gửi lên một danh thiếp ${EM_FLOWERS}`)
+  );
+  container.addSeparatorComponents(new SummarySeparator());
+  container.addMediaGalleryComponents(
+    new SummaryGallery().addItems(new SummaryGalleryItem().setURL('attachment://card.png'))
+  );
+  addFooter(container, when);
+
+  await channel.send({
+    components: [container],
+    files,
+    flags: SummaryFlags.IsComponentsV2,
+    allowedMentions: { parse: [] },
+  });
+}
+
+async function postShares() {
+  if (postingShares) return;
+  postingShares = true;
+  try {
+    const channel = await getChannel();
+    if (!channel) return;
+
+    const { data, error } = await supabase
+      .from('discord_shares')
+      .select('*')
+      .eq('posted', false)
+      .order('created_at', { ascending: true })
+      .limit(3);
+    if (error) return console.error('Lỗi đọc discord_shares:', error.message);
+    if (!data?.length) return;
+
+    for (const row of data) {
+      try {
+        if (row.kind === 'workshop') await sendWorkshop(channel, row);
+        else if (row.kind === 'card') await sendCard(channel, row);
+        else console.error('Loại share lạ:', row.kind);
+        console.log('Đã đăng', row.kind, 'id', row.id);
+      } catch (err) {
+        console.error('Lỗi đăng', row.kind, 'id', row.id, err);
+      } finally {
+        await supabase.from('discord_shares').update({ posted: true }).eq('id', row.id);
+      }
+    }
+  } finally {
+    postingShares = false;
+  }
+}
+
 console.log('[summary] CHANNEL_ID =', SUMMARY_CHANNEL_ID);
 
 setInterval(() => {
   if (!client.isReady()) return console.log('[summary] bot chưa ready');
   postDailySummaries();
+  postShares();
 }, 30000);
 // ===== HẾT =====
