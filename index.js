@@ -127,6 +127,26 @@ function addFooter(container, when) {
   );
 }
 
+// Tạo thread dưới bài vừa đăng và ping người gửi vào đó.
+// Lỗi ở bước này (thiếu quyền, kênh không hỗ trợ thread...) không làm hỏng bài đã đăng.
+async function openThread(msg, title, row, note) {
+  try {
+    const thread = await msg.startThread({
+      name: clip(title, 100) || 'Justaseed',
+      autoArchiveDuration: 1440, // tự lưu trữ sau 24 giờ không hoạt động
+      reason: 'Justaseed: thread cho bài đăng mới',
+    });
+    if (isSnow(row.discord_id)) {
+      await thread.send({
+        content: `<@${row.discord_id}> ${note}`,
+        allowedMentions: { parse: [], users: [String(row.discord_id)] },
+      });
+    }
+  } catch (e) {
+    console.error('Không tạo được thread:', e.message);
+  }
+}
+
 // Lấy avatar: ưu tiên ảnh avatar trong game, không có thì dùng avatar Discord
 async function resolveAvatar(row, files) {
   if (row.avatar) {
@@ -206,13 +226,14 @@ async function postDailySummaries() {
 
         addFooter(container, when); // separator + nút link + footer
 
-        await channel.send({
+        const sent = await channel.send({
           components: [container],
           files,
           flags: SummaryFlags.IsComponentsV2,
           allowedMentions: { parse: [] },
         });
         console.log('Đã đăng tổng kết id', row.id);
+        await openThread(sent, `Tổng kết ngày ${row.day} - ${shop}`, row, 'tổng kết ngày của bạn đã được đăng, mọi người cùng trò chuyện ở đây nhé!');
       } catch (err) {
         console.error('Lỗi đăng tổng kết id', row.id, err);
       } finally {
@@ -277,12 +298,13 @@ async function sendWorkshop(channel, row) {
   const pingIds = [...new Set([p.maker_id, p.gifter_id].filter(isSnow).map(String))];
   console.log('[workshop] maker_id =', p.maker_id, '| gifter_id =', p.gifter_id, '| ping =', pingIds);
 
-  await channel.send({
+  const sent = await channel.send({
     components: [container],
     files,
     flags: SummaryFlags.IsComponentsV2,
     allowedMentions: { parse: [], users: pingIds },
   });
+  await openThread(sent, `Workshop: ${clip(p.name, 60)}`, row, 'vật phẩm workshop của bạn đã được đăng, mọi người cùng trò chuyện ở đây nhé!');
 }
 
 // ---------- 3. DANH THIẾP ----------
@@ -301,12 +323,13 @@ async function sendCard(channel, row) {
   );
   addFooter(container, when);
 
-  await channel.send({
+  const sent = await channel.send({
     components: [container],
     files,
     flags: SummaryFlags.IsComponentsV2,
     allowedMentions: { parse: [] },
   });
+  await openThread(sent, 'Danh thiếp của người chơi', row, 'danh thiếp của bạn đã được đăng, mọi người cùng trò chuyện ở đây nhé!');
 }
 
 async function postShares() {
