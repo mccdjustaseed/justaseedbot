@@ -75,6 +75,7 @@ client.on('interactionCreate', async (interaction) => {
 
 client.login(TOKEN);
 
+// ===== ĐĂNG ẢNH TỔNG KẾT LÊN DISCORD =====
 const { AttachmentBuilder: SummaryAttachment } = require('discord.js');
 
 const SUMMARY_CHANNEL_ID = process.env.CHANNEL_ID;
@@ -137,3 +138,4 @@ setInterval(() => {
   if (!client.isReady()) return console.log('[summary] bot chưa ready');
   postDailySummaries();
 }, 30000);
+// ===== HẾT =====
