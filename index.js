@@ -75,19 +75,18 @@ client.on('interactionCreate', async (interaction) => {
 
 client.login(TOKEN);
 
-const { EmbedBuilder, AttachmentBuilder } = require('discord.js');
-// (nếu dùng import: import { EmbedBuilder, AttachmentBuilder } from 'discord.js')
+const { AttachmentBuilder: SummaryAttachment } = require('discord.js');
 
-const CHANNEL_ID = process.env.CHANNEL_ID;
+const SUMMARY_CHANNEL_ID = process.env.CHANNEL_ID;
 let postingSummaries = false;
 
-async function postDailySummaries() {console.log('[summary] đang kiểm tra...');
-
+async function postDailySummaries() {
+  console.log('[summary] đang kiểm tra...');
   if (postingSummaries) return;
   postingSummaries = true;
   try {
-    if (!CHANNEL_ID) return console.error('Thiếu CHANNEL_ID');
-    const channel = await client.channels.fetch(CHANNEL_ID).catch(e => {
+    if (!SUMMARY_CHANNEL_ID) return console.error('Thiếu CHANNEL_ID');
+    const channel = await client.channels.fetch(SUMMARY_CHANNEL_ID).catch(e => {
       console.error('Không fetch được kênh:', e.message); return null;
     });
     if (!channel) return;
@@ -105,7 +104,7 @@ async function postDailySummaries() {console.log('[summary] đang kiểm tra...'
       try {
         const base64 = row.image.includes(',') ? row.image.split(',')[1] : row.image;
         const buffer = Buffer.from(base64, 'base64');
-        const attachment = new AttachmentBuilder(buffer, { name: 'summary.png' });
+        const attachment = new SummaryAttachment(buffer, { name: 'summary.png' });
 
         const embed = new EmbedBuilder()
           .setTitle(`Tổng kết ngày thứ ${row.day}`)
@@ -124,7 +123,6 @@ async function postDailySummaries() {console.log('[summary] đang kiểm tra...'
       } catch (err) {
         console.error('Lỗi đăng tổng kết id', row.id, err);
       } finally {
-        // đánh dấu luôn để dòng lỗi không chặn hàng đợi
         await supabase.from('daily_summaries').update({ posted: true }).eq('id', row.id);
       }
     }
@@ -133,8 +131,7 @@ async function postDailySummaries() {console.log('[summary] đang kiểm tra...'
   }
 }
 
-// Đặt trong sự kiện ready (discord.js v14: 'ready', v15: 'clientReady')
-console.log('[summary] CHANNEL_ID =', CHANNEL_ID);
+console.log('[summary] CHANNEL_ID =', SUMMARY_CHANNEL_ID);
 
 setInterval(() => {
   if (!client.isReady()) return console.log('[summary] bot chưa ready');
