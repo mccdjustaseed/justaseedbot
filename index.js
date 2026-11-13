@@ -9,7 +9,7 @@ const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds]
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
 });
 
 const commands = [
@@ -445,4 +445,60 @@ setInterval(() => {
   if (!client.isReady()) return console.log('[summary] bot chưa ready');
   postDailySummaries();
 }, 30000);
+// ===== HẾT =====
+
+// ===== ĐỒNG BỘ THÀNH VIÊN SERVER -> bảng server_members =====
+// Cần: Server Members Intent bật trong Developer Portal, SUPABASE_KEY là service role key, biến GUILD_ID (ID server).
+const GUILD_ID = process.env.GUILD_ID; // ID server của bot (bỏ trống thì dùng server đầu tiên)
+
+async function syncMembers() {
+  try {
+    const guild = GUILD_ID ? await client.guilds.fetch(GUILD_ID) : client.guilds.cache.first();
+    if (!guild) return console.error('[members] không tìm thấy server');
+    const members = await guild.members.fetch();
+    const ids = [...members.filter(m => !m.user.bot).keys()];
+
+    for (let i = 0; i < ids.length; i += 500) {
+      const rows = ids.slice(i, i + 500).map(id => ({ discord_id: id }));
+      const { error } = await supabase.from('server_members')
+        .upsert(rows, { onConflict: 'discord_id', ignoreDuplicates: true });
+      if (error) return console.error('[members] lỗi upsert:', error.message);
+    }
+
+    // xóa người đã rời server
+    const inGuild = new Set(ids), gone = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabase.from('server_members').select('discord_id').range(from, from + 999);
+      if (error || !data?.length) break;
+      data.forEach(r => { if (!inGuild.has(r.discord_id)) gone.push(r.discord_id); });
+      if (data.length < 1000) break;
+    }
+    for (let i = 0; i < gone.length; i += 200) {
+      await supabase.from('server_members').delete().in('discord_id', gone.slice(i, i + 200));
+    }
+    console.log(`[members] đã đồng bộ ${ids.length} thành viên, xóa ${gone.length}`);
+  } catch (e) {
+    console.error('[members] lỗi đồng bộ:', e.message);
+  }
+}
+
+const inOurGuild = (m) => !GUILD_ID || m.guild.id === GUILD_ID;
+
+client.on('guildMemberAdd', async (m) => {
+  if (!inOurGuild(m) || m.user.bot) return;
+  const { error } = await supabase.from('server_members')
+    .upsert({ discord_id: m.id }, { onConflict: 'discord_id', ignoreDuplicates: true });
+  if (error) console.error('[members] lỗi thêm:', error.message);
+});
+
+client.on('guildMemberRemove', async (m) => {
+  if (!inOurGuild(m)) return;
+  const { error } = await supabase.from('server_members').delete().eq('discord_id', m.id);
+  if (error) console.error('[members] lỗi xóa:', error.message);
+});
+
+client.once('ready', () => {
+  syncMembers();
+  setInterval(syncMembers, 6 * 60 * 60 * 1000); // đồng bộ lại mỗi 6 giờ cho chắc
+});
 // ===== HẾT =====
