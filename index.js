@@ -542,3 +542,47 @@ supabase.channel('role_purchases_rt')
   .subscribe((st) => console.log('[roles] realtime:', st));
 setInterval(() => { if (client.isReady()) grantRoles(); }, 10000);
 // ===== HẾT =====
+
+// ===== ĐỒNG BỘ DANH SÁCH ROLE SERVER -> bảng guild_roles (để tab Quản trị chọn role) =====
+async function syncRoles() {
+  try {
+    const guild = GUILD_ID ? await client.guilds.fetch(GUILD_ID) : client.guilds.cache.first();
+    if (!guild) return console.error('[guild_roles] không tìm thấy server');
+    const roles = await guild.roles.fetch();
+    const me = await guild.members.fetchMe();
+    const top = me.roles.highest.position;
+    const rows = [...roles.values()].filter(r => r.id !== guild.id).map(r => ({
+      role_id: r.id,
+      name: clip(r.name, 100),
+      color: r.color ? '#' + r.color.toString(16).padStart(6, '0') : null,
+      position: r.position,
+      assignable: !r.managed && r.position < top,
+      updated_at: new Date().toISOString(),
+    }));
+    for (let i = 0; i < rows.length; i += 200) {
+      const { error } = await supabase.from('guild_roles').upsert(rows.slice(i, i + 200), { onConflict: 'role_id' });
+      if (error) return console.error('[guild_roles] lỗi upsert:', error.message);
+    }
+    const keep = new Set(rows.map(r => r.role_id)), gone = [];
+    const { data } = await supabase.from('guild_roles').select('role_id');
+    (data || []).forEach(r => { if (!keep.has(r.role_id)) gone.push(r.role_id); });
+    if (gone.length) await supabase.from('guild_roles').delete().in('role_id', gone);
+    console.log(`[guild_roles] đã đồng bộ ${rows.length} role, xóa ${gone.length}`);
+  } catch (e) {
+    console.error('[guild_roles] lỗi đồng bộ:', e.message);
+  }
+}
+let syncRolesTimer = null;
+const syncRolesSoon = (g) => {
+  if (GUILD_ID && g && g.id !== GUILD_ID) return;
+  clearTimeout(syncRolesTimer);
+  syncRolesTimer = setTimeout(syncRoles, 2000); // gộp nhiều thay đổi liên tiếp
+};
+client.on('roleCreate', (r) => syncRolesSoon(r.guild));
+client.on('roleUpdate', (_o, r) => syncRolesSoon(r.guild));
+client.on('roleDelete', (r) => syncRolesSoon(r.guild));
+client.once('ready', () => {
+  syncRoles();
+  setInterval(syncRoles, 10 * 60 * 1000); // đồng bộ lại mỗi 10 phút cho chắc
+});
+// ===== HẾT =====
