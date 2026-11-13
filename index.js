@@ -544,6 +544,8 @@ setInterval(() => { if (client.isReady()) grantRoles(); }, 10000);
 // ===== HẾT =====
 
 // ===== ĐỒNG BỘ DANH SÁCH ROLE SERVER -> bảng guild_roles (để tab Quản trị chọn role) =====
+// Cần chạy SQL trước:
+//   alter table public.guild_roles add column if not exists color2 text, add column if not exists color3 text;
 async function syncRoles() {
   try {
     const guild = GUILD_ID ? await client.guilds.fetch(GUILD_ID) : client.guilds.cache.first();
@@ -551,18 +553,40 @@ async function syncRoles() {
     const roles = await guild.roles.fetch();
     const me = await guild.members.fetchMe();
     const top = me.roles.highest.position;
-    const rows = [...roles.values()].filter(r => r.id !== guild.id).map(r => ({
-      role_id: r.id,
-      name: clip(r.name, 100),
-      color: r.color ? '#' + r.color.toString(16).padStart(6, '0') : null,
-      position: r.position,
-      assignable: !r.managed && r.position < top,
-      updated_at: new Date().toISOString(),
-    }));
+
+    // Lấy màu gốc từ API Discord (gradient / holographic), không phụ thuộc bản discord.js
+    const rawColors = new Map();
+    try {
+      const raw = await rest.get(Routes.guildRoles(guild.id));
+      raw.forEach(x => rawColors.set(x.id, x.colors || {}));
+    } catch (e) { console.error('[guild_roles] không lấy được màu gốc:', e.message); }
+    const hx = (n) => (n ? '#' + Number(n).toString(16).padStart(6, '0') : null);
+
+    const rows = [...roles.values()].filter(r => r.id !== guild.id).map(r => {
+      const c = rawColors.get(r.id) || {};
+      return {
+        role_id: r.id,
+        name: clip(r.name, 100),
+        color: hx(c.primary_color ?? r.color),
+        color2: hx(c.secondary_color),
+        color3: hx(c.tertiary_color), // có màu này = role holographic
+        position: r.position,
+        assignable: !r.managed && r.position < top,
+        updated_at: new Date().toISOString(),
+      };
+    });
+
     for (let i = 0; i < rows.length; i += 200) {
-      const { error } = await supabase.from('guild_roles').upsert(rows.slice(i, i + 200), { onConflict: 'role_id' });
+      let chunk = rows.slice(i, i + 200);
+      let { error } = await supabase.from('guild_roles').upsert(chunk, { onConflict: 'role_id' });
+      if (error && /color2|color3/.test(error.message)) { // chưa chạy SQL thì vẫn đồng bộ như cũ
+        console.error('[guild_roles] thiếu cột color2/color3, hãy chạy SQL');
+        chunk = chunk.map(({ color2, color3, ...rest }) => rest);
+        ({ error } = await supabase.from('guild_roles').upsert(chunk, { onConflict: 'role_id' }));
+      }
       if (error) return console.error('[guild_roles] lỗi upsert:', error.message);
     }
+
     const keep = new Set(rows.map(r => r.role_id)), gone = [];
     const { data } = await supabase.from('guild_roles').select('role_id');
     (data || []).forEach(r => { if (!keep.has(r.role_id)) gone.push(r.role_id); });
