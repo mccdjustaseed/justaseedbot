@@ -95,6 +95,7 @@ const SUMMARY_CHANNEL_ID = process.env.CHANNEL_ID;
 const GAME_URL = 'https://justaseed.xyz/';
 let postingSummaries = false;
 let postingShares = false;
+let sharesAgain = false; // MỚI: có bài đến trong lúc đang đăng thì chạy lại ngay
 
 const EM_FLOWERS = '<a:tinyyellowflowers:1569016131426066512>';
 const EM_SUNFLOWER = '<:sunflower_art:1569015850617413703>';
@@ -257,12 +258,16 @@ async function sendWorkshop(channel, row) {
   const stars = '★'.repeat(starN) + '☆'.repeat(5 - starN);
   const value = Number(p.value) > 0 ? `${Number(p.value).toLocaleString('vi-VN')}đ` : null;
 
+  // MỚI: loại workshop (Cắm hoa, Nến thơm, Áo phông...) do game gửi
+  const wsType = clip(p.workshop_type || p.type || 'Workshop', 30);
+  const wsEmoji = clip(p.emoji, 8);
+
   const poster = isSnow(row.discord_id) ? `<@${row.discord_id}>` : 'Chủ shop';
   const maker = who(p.maker_id, p.maker_name, 'Không rõ');
 
   const lines = [
     `${EM_SUNFLOWER} **Vật phẩm:** ${clip(p.name, 60)}`,
-    `${EM_LEAF} **Loại:** ${clip(p.emoji, 8)} ${clip(p.type, 30)}`,
+    `${EM_LEAF} **Loại:** ${wsEmoji} ${wsType}`,
     `${EM_SUNFLOWER} **Chất lượng:** ${q}/100 ${stars}`,
   ];
   if (p.materials) lines.push(`${EM_LEAF} **Nguyên liệu:** ${clip(p.materials, 300)}`);
@@ -280,8 +285,9 @@ async function sendWorkshop(channel, row) {
   if (caption) texts.push(new SummaryText().setContent(`${EM_DECO} ${caption.slice(0, 300)}`));
 
   const container = new SummaryContainer();
+  // MỚI: tiêu đề hiện đúng loại workshop thay vì tên món
   container.addTextDisplayComponents(
-    new SummaryText().setContent(`### ${EM_FLOWERS} Workshop: ${clip(p.name, 60)} ${EM_FLOWERS}`)
+    new SummaryText().setContent(`### ${EM_FLOWERS} Workshop: ${wsEmoji} ${wsType} ${EM_FLOWERS}`)
   );
   container.addSectionComponents(
     new SummarySection()
@@ -304,7 +310,8 @@ async function sendWorkshop(channel, row) {
     flags: SummaryFlags.IsComponentsV2,
     allowedMentions: { parse: [], users: pingIds },
   });
-  await openThread(sent, `Workshop: ${clip(p.name, 60)}`, row, 'vật phẩm workshop của bạn đã được đăng, mọi người cùng trò chuyện ở đây nhé!');
+  // MỚI: tên thread có loại workshop
+  await openThread(sent, `Workshop ${wsType}: ${clip(p.name, 60)}`, row, 'vật phẩm workshop của bạn đã được đăng, mọi người cùng trò chuyện ở đây nhé!');
 }
 
 // ---------- 3. DANH THIẾP ----------
@@ -333,7 +340,8 @@ async function sendCard(channel, row) {
 }
 
 async function postShares() {
-  if (postingShares) return;
+  // MỚI: đang đăng thì đánh dấu để chạy lại ngay sau đó, không bỏ sót bài mới
+  if (postingShares) { sharesAgain = true; return; }
   postingShares = true;
   try {
     const channel = await getChannel();
@@ -362,14 +370,27 @@ async function postShares() {
     }
   } finally {
     postingShares = false;
+    if (sharesAgain) { sharesAgain = false; postShares(); }
   }
 }
 
 console.log('[summary] CHANNEL_ID =', SUMMARY_CHANNEL_ID);
 
+// MỚI: nhận bài ngay khi game gửi (cần chạy SQL: alter publication supabase_realtime add table public.discord_shares;)
+supabase
+  .channel('discord_shares_rt')
+  .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'discord_shares' },
+    () => { if (client.isReady()) postShares(); })
+  .subscribe((st) => console.log('[shares] realtime:', st));
+
+// MỚI: dự phòng 5 giây cho workshop/danh thiếp, tổng kết ngày vẫn 30 giây
+setInterval(() => {
+  if (!client.isReady()) return;
+  postShares();
+}, 5000);
+
 setInterval(() => {
   if (!client.isReady()) return console.log('[summary] bot chưa ready');
   postDailySummaries();
-  postShares();
 }, 30000);
 // ===== HẾT =====
