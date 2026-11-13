@@ -137,12 +137,14 @@ async function openThread(msg, title, row, note) {
       autoArchiveDuration: 1440, // tự lưu trữ sau 24 giờ không hoạt động
       reason: 'Justaseed: thread cho bài đăng mới',
     });
-    if (isSnow(row.discord_id)) {
-      await thread.send({
-        content: `<@${row.discord_id}> ${note}`,
-        allowedMentions: { parse: [], users: [String(row.discord_id)] },
-      });
-    }
+    // Không ping: chỉ ghi tên hiển thị, allowedMentions rỗng
+    const label = isSnow(row.discord_id)
+      ? `<@${row.discord_id}>`
+      : clip(row.owner_name || row.shop_name || 'Bạn', 40);
+    await thread.send({
+      content: `${label} ${note}`,
+      allowedMentions: { parse: [], users: [] },
+    });
   } catch (e) {
     console.error('Không tạo được thread:', e.message);
   }
