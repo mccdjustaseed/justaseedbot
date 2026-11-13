@@ -502,3 +502,43 @@ client.once('ready', () => {
   setInterval(syncMembers, 6 * 60 * 60 * 1000); // đồng bộ lại mỗi 6 giờ cho chắc
 });
 // ===== HẾT =====
+
+// ===== MUA ROLE TRONG GAME -> GẮN ROLE DISCORD =====
+// Cần quyền Manage Roles, và role của bot phải nằm CAO HƠN các role được bán.
+let grantingRoles = false, grantAgain = false;
+async function grantRoles() {
+  if (grantingRoles) { grantAgain = true; return; }
+  grantingRoles = true;
+  try {
+    const guild = GUILD_ID ? await client.guilds.fetch(GUILD_ID) : client.guilds.cache.first();
+    if (!guild) return console.error('[roles] không tìm thấy server');
+    const { data, error } = await supabase.from('role_purchases').select('*')
+      .eq('status', 'pending').order('created_at', { ascending: true }).limit(10);
+    if (error) return console.error('[roles] lỗi đọc đơn:', error.message);
+    for (const row of data || []) {
+      let status = 'done', err = null;
+      try {
+        const { data: item } = await supabase.from('shop_roles').select('role_id,price,active').eq('role_id', row.role_id).maybeSingle();
+        if (!item || !item.active) throw new Error('Role không còn bán');
+        if (Number(item.price) !== Number(row.price)) throw new Error('Giá đã thay đổi');
+        const member = await guild.members.fetch(row.discord_id).catch(() => null);
+        if (!member) throw new Error('Chưa tham gia server');
+        await member.roles.add(String(row.role_id), 'Justaseed: mua role trong game');
+        console.log('[roles] đã gắn', row.role_id, 'cho', row.discord_id);
+      } catch (e) {
+        status = 'failed'; err = clip(e.message, 200);
+        console.error('[roles] lỗi đơn', row.id, e.message);
+      }
+      await supabase.from('role_purchases').update({ status, error: err }).eq('id', row.id);
+    }
+  } finally {
+    grantingRoles = false;
+    if (grantAgain) { grantAgain = false; grantRoles(); }
+  }
+}
+supabase.channel('role_purchases_rt')
+  .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'role_purchases' },
+    () => { if (client.isReady()) grantRoles(); })
+  .subscribe((st) => console.log('[roles] realtime:', st));
+setInterval(() => { if (client.isReady()) grantRoles(); }, 10000);
+// ===== HẾT =====
