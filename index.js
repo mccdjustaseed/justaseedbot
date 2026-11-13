@@ -75,7 +75,7 @@ client.on('interactionCreate', async (interaction) => {
 
 client.login(TOKEN);
 
-// ===== ĐĂNG TỔNG KẾT / WORKSHOP / DANH THIẾP LÊN DISCORD (LAYOUT) =====
+// ===== ĐĂNG TỔNG KẾT / WORKSHOP / VÀNG / DANH THIẾP LÊN DISCORD (LAYOUT) =====
 const {
   AttachmentBuilder: SummaryAttachment,
   ContainerBuilder: SummaryContainer,
@@ -95,7 +95,7 @@ const SUMMARY_CHANNEL_ID = process.env.CHANNEL_ID;
 const GAME_URL = 'https://justaseed.xyz/';
 let postingSummaries = false;
 let postingShares = false;
-let sharesAgain = false; // MỚI: có bài đến trong lúc đang đăng thì chạy lại ngay
+let sharesAgain = false; // có bài đến trong lúc đang đăng thì chạy lại ngay
 
 const EM_FLOWERS = '<a:tinyyellowflowers:1569016131426066512>';
 const EM_SUNFLOWER = '<:sunflower_art:1569015850617413703>';
@@ -258,7 +258,7 @@ async function sendWorkshop(channel, row) {
   const stars = '★'.repeat(starN) + '☆'.repeat(5 - starN);
   const value = Number(p.value) > 0 ? `${Number(p.value).toLocaleString('vi-VN')}đ` : null;
 
-  // MỚI: loại workshop (Cắm hoa, Nến thơm, Áo phông...) do game gửi
+  // loại workshop (Cắm hoa, Nến thơm, Áo phông...) do game gửi
   const wsType = clip(p.workshop_type || p.type || 'Workshop', 30);
   const wsEmoji = clip(p.emoji, 8);
 
@@ -285,7 +285,7 @@ async function sendWorkshop(channel, row) {
   if (caption) texts.push(new SummaryText().setContent(`${EM_DECO} ${caption.slice(0, 300)}`));
 
   const container = new SummaryContainer();
-  // MỚI: tiêu đề hiện đúng loại workshop thay vì tên món
+  // tiêu đề hiện đúng loại workshop thay vì tên món
   container.addTextDisplayComponents(
     new SummaryText().setContent(`### ${EM_FLOWERS} Workshop: ${wsEmoji} ${wsType} ${EM_FLOWERS}`)
   );
@@ -310,8 +310,59 @@ async function sendWorkshop(channel, row) {
     flags: SummaryFlags.IsComponentsV2,
     allowedMentions: { parse: [], users: pingIds },
   });
-  // MỚI: tên thread có loại workshop
+  // tên thread có loại workshop
   await openThread(sent, `Workshop ${wsType}: ${clip(p.name, 60)}`, row, 'vật phẩm workshop của bạn đã được đăng, mọi người cùng trò chuyện ở đây nhé!');
+}
+
+// ---------- 2b. MÓN VÀNG (TIỆM VÀNG) ----------
+async function sendGold(channel, row) {
+  const p = row.payload || {};
+  const files = [new SummaryAttachment(toBuf(row.image), { name: 'gold.png' })];
+  const avatarUrl = await resolveAvatar(row, files);
+  const when = Math.floor(new Date(row.created_at || Date.now()).getTime() / 1000);
+
+  const goldType = clip(p.type || 'Trang sức', 30);
+  const goldEmoji = clip(p.emoji || '💍', 8);
+  const value = Number(p.value) > 0 ? `${Number(p.value).toLocaleString('vi-VN')}đ` : null;
+  const poster = isSnow(row.discord_id) ? `<@${row.discord_id}>` : 'Chủ shop';
+
+  const lines = [
+    `${EM_SUNFLOWER} **Món vàng:** ${clip(p.name, 60)}`,
+    `${EM_LEAF} **Loại:** ${goldEmoji} ${goldType}${p.custom ? ' · Đặt riêng' : ''}`,
+    `${EM_SUNFLOWER} **Trọng lượng:** ${clip(p.weight, 30)}`,
+    `${EM_LEAF} **Tuổi vàng:** ${clip(p.karat, 30)}`,
+  ];
+  if (p.gem) lines.push(`${EM_SUNFLOWER} **Đá:** ${clip(p.gem, 40)}`);
+  if (p.tone) lines.push(`${EM_LEAF} **Màu vàng:** ${clip(p.tone, 30)}`);
+  if (value) lines.push(`${EM_SUNFLOWER} **Giá trị lúc khoe:** ${value}`);
+  lines.push(`${EM_LEAF} **Khoe bởi:** ${poster} · ${clip(p.shop_name || 'Tiệm hoa', 60)}`);
+
+  const texts = [new SummaryText().setContent(lines.join('\n').slice(0, 1800))];
+  const caption = String(p.caption || '').trim();
+  if (caption) texts.push(new SummaryText().setContent(`${EM_DECO} ${caption.slice(0, 300)}`));
+
+  const container = new SummaryContainer();
+  container.addTextDisplayComponents(
+    new SummaryText().setContent(`### ${EM_FLOWERS} Tiệm vàng: ${goldEmoji} ${goldType} ${EM_FLOWERS}`)
+  );
+  container.addSectionComponents(
+    new SummarySection()
+      .addTextDisplayComponents(...texts)
+      .setThumbnailAccessory(new SummaryThumb().setURL(avatarUrl))
+  );
+  container.addSeparatorComponents(new SummarySeparator());
+  container.addMediaGalleryComponents(
+    new SummaryGallery().addItems(new SummaryGalleryItem().setURL('attachment://gold.png'))
+  );
+  addFooter(container, when);
+
+  const sent = await channel.send({
+    components: [container],
+    files,
+    flags: SummaryFlags.IsComponentsV2,
+    allowedMentions: { parse: [] },
+  });
+  await openThread(sent, `Tiệm vàng: ${clip(p.name, 70)}`, row, 'món vàng của bạn đã được đăng, mọi người cùng trò chuyện ở đây nhé!');
 }
 
 // ---------- 3. DANH THIẾP ----------
@@ -340,7 +391,7 @@ async function sendCard(channel, row) {
 }
 
 async function postShares() {
-  // MỚI: đang đăng thì đánh dấu để chạy lại ngay sau đó, không bỏ sót bài mới
+  // đang đăng thì đánh dấu để chạy lại ngay sau đó, không bỏ sót bài mới
   if (postingShares) { sharesAgain = true; return; }
   postingShares = true;
   try {
@@ -359,6 +410,7 @@ async function postShares() {
     for (const row of data) {
       try {
         if (row.kind === 'workshop') await sendWorkshop(channel, row);
+        else if (row.kind === 'gold') await sendGold(channel, row);
         else if (row.kind === 'card') await sendCard(channel, row);
         else console.error('Loại share lạ:', row.kind);
         console.log('Đã đăng', row.kind, 'id', row.id);
@@ -376,14 +428,14 @@ async function postShares() {
 
 console.log('[summary] CHANNEL_ID =', SUMMARY_CHANNEL_ID);
 
-// MỚI: nhận bài ngay khi game gửi (cần chạy SQL: alter publication supabase_realtime add table public.discord_shares;)
+// nhận bài ngay khi game gửi (cần chạy SQL: alter publication supabase_realtime add table public.discord_shares;)
 supabase
   .channel('discord_shares_rt')
   .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'discord_shares' },
     () => { if (client.isReady()) postShares(); })
   .subscribe((st) => console.log('[shares] realtime:', st));
 
-// MỚI: dự phòng 5 giây cho workshop/danh thiếp, tổng kết ngày vẫn 30 giây
+// dự phòng 5 giây cho workshop/vàng/danh thiếp, tổng kết ngày vẫn 30 giây
 setInterval(() => {
   if (!client.isReady()) return;
   postShares();
