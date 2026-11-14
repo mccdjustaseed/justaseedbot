@@ -560,53 +560,119 @@ async function buildGold(uid, fresh = true, pageReq = 0) {
   const pngs = await Promise.all(rows.map(r => R.renderRow(sv.s, r)));
   return { pngs, head: `${H('Tiến độ gia công vàng', EM.ring)}\n-# ${EM.a} Tiệm vàng Kim Ngân · ngày game ${day} · ${orders.length} đơn · Trang ${page + 1}/${pages}`, s: sv.s, at: sv.at, page, pages };
 }
-async function buildBranch(uid, fresh = true, pageReq = 0) {
+// ---------------- /chinhanh: tổng quan + nút từng chi nhánh ----------------
+const BR_GAP = (l) => Math.max(4, Math.round((19 - 1.5 * l) * 10) / 10); // giây/đơn của nhân viên
+const BR_WAGE = (l) => 20000 + 10000 * l;
+const BR_SHARE = (l) => 0.22 + 0.07 * (l - 1);
+const BR_MAXL = 5, BR_MAXS = 4;
+function brInfo(s, b) {
+  const st = b.st || {}, stf = b.stf || [], dp = Math.max(0, Math.min(1, Number(s.x2?.dp) || 0)), open = s.ph === 'open';
+  const fl = FLOWERS.reduce((a, f) => a + (st[f[0]] || 0), 0), pp = ['S', 'M', 'L'].reduce((a, k) => a + (st[k] || 0), 0);
+  const why = [];
+  if (!stf.length) why.push('chưa có nhân viên');
+  if (!fl || !pp) why.push('chưa nhập hàng');
+  const r = b.plan?.r, selling = open && !b.pause && !!r;
+  let state, right, pct = 0;
+  if (b.pause) { state = 'Tạm nghỉ'; right = 'Tạm nghỉ'; }
+  else if (selling) { state = 'Đang bán hàng'; pct = dp; right = `Đang bán hàng · ${Math.floor(r.n * dp)}/${r.n} đơn`; }
+  else if (why.length) { state = 'Chưa sẵn sàng'; right = 'Chưa sẵn sàng'; }
+  else { state = 'Sẵn sàng'; right = 'Sẵn sàng'; }
+  return { b, st, stf, fl, pp, why, r, selling, dp, state, right, pct, wage: stf.reduce((a, t) => a + BR_WAGE(t.l || 1), 0) };
+}
+const brRowSpec = (x) => ({
+  icon: '🏬', name: clip(`CN ${x.b.n}`, 40),
+  sub: `cấp ${x.b.l}/${BR_MAXL} · ${x.stf.length}/${BR_MAXS} nhân viên · kho ${x.fl} hoa, ${x.pp} giấy`,
+  pct: x.pct, right: x.right,
+});
+const brStockText = (st) => {
+  const f = FLOWERS.filter(([k]) => (st[k] || 0) > 0).map(([k, n]) => `${n} **${st[k]}**`);
+  const p = ['S', 'M', 'L'].filter(k => (st[k] || 0) > 0).map(k => `${NAMES[k]} **${st[k]}**`);
+  return { f, p };
+};
+const brButtons = (owner, brs, cur) => {
+  const row = new ActionRowBuilder();
+  brs.slice(0, 5).forEach((b, k) => row.addComponents(new ButtonBuilder()
+    .setCustomId(`br:${owner}:${k}:g`).setLabel(clip(`CN ${k + 1} · ${b.n}`, 40))
+    .setStyle(cur === k ? ButtonStyle.Primary : ButtonStyle.Secondary)));
+  return row;
+};
+const brCtl = (owner, view) => new ActionRowBuilder().addComponents(
+  ...(view === 'all' ? [] : [new ButtonBuilder().setCustomId(`br:${owner}:all:g`).setLabel('Tổng quan').setEmoji(EM.left).setStyle(ButtonStyle.Secondary)]),
+  new ButtonBuilder().setCustomId(`br:${owner}:${view}:r`).setLabel('Làm mới').setEmoji(EM.refresh).setStyle(ButtonStyle.Secondary));
+async function branchPayload(uid, owner, view, fresh) {
   const sv = await (fresh ? loadFresh(uid) : loadSave(uid));
   if (!sv) return { error: NO_SAVE };
   const s = sv.s, brs = s.x2?.br || [];
   console.log(`[progress] chi nhánh: ${brs.length} chi nhánh trong save (user ${uid}, save cập nhật ${new Date(sv.at).toISOString()})`);
-  if (!brs.length) return { error: `Bạn chưa mở chi nhánh nào (dữ liệu cập nhật ${stamp(sv.at)}). Vào tab Chi nhánh trong game để mở chi nhánh đầu tiên.`, s, at: sv.at };
-  const open = s.ph === 'open';
-  const dp = Math.max(0, Math.min(1, Number(s.x2?.dp) || 0));
-  const { pages, page } = pageOf(brs.length, pageReq);
-  const slice = brs.slice(page * PER_PAGE, (page + 1) * PER_PAGE);
-  const info = slice.map(b => {
-    const st = b.st || {};
-    const fl = FLOWERS.reduce((a, f) => a + (st[f[0]] || 0), 0), pp = ['S', 'M', 'L'].reduce((a, k) => a + (st[k] || 0), 0);
-    const why = [];
-    if (!(b.stf || []).length) why.push('chưa có nhân viên');
-    if (!fl || !pp) why.push('chưa nhập hàng');
-    return { b, st, fl, pp, why };
-  });
-  const rows = info.map(({ b, fl, pp, why }) => {
-    const r = b.plan?.r;
-    let right, pct = 0;
-    if (b.pause) right = 'Tạm nghỉ';
-    else if (open && r) {
-      pct = dp; right = `Đang bán hàng · ${Math.floor(r.n * dp)}/${r.n} đơn`;
-    } else if (why.length) right = 'Chưa sẵn sàng';
-    else right = 'Sẵn sàng';
-    return {
-      icon: '🏬', name: clip(`CN ${b.n}`, 40),
-      sub: `cấp ${b.l}/5 · ${(b.stf || []).length} nhân viên · kho ${fl} hoa, ${pp} giấy${!b.pause && why.length ? ' · ' + why.join(', ') : ''}`,
-      pct, right,
-    };
-  });
-  const pngs = await Promise.all(rows.map(r => R.renderRow(s, r)));
-  const extra = info.map(({ b, st, why }) => {
-    const items = Object.keys(st).filter(k => (st[k] || 0) > 0 && NAMES[k]).map(k => `${NAMES[k]} **${st[k]}**`);
-    const sell = open && !b.pause && b.plan;
-    const r = b.plan?.r;
-    const line = sell && r ? `\n${EM.ok} **Đang bán hàng** — ${Math.floor(r.n * dp)}/${r.n} đơn, doanh thu ${vnd(Math.round(r.rev * dp))}${r.lost ? `, ${Math.floor(r.lost * dp)}/${r.lost} khách chưa được phục vụ` : ''}` : '';
-    return `${EM.box} **Kho CN ${clip(b.n, 30)}**: ${items.length ? items.join(' · ').slice(0, 600) : 'Trống'}${line}`;
-  }).join('\n');
-  return { pngs, extra, head: `${H('Tiến độ chi nhánh', EM.shop)}\n-# ${EM.a} ${clip(s.pf?.nm || s.name || 'Tiệm hoa', 40)} · ${brs.length} chi nhánh · ${open ? 'đang mở bán' : 'chưa mở bán'} · Trang ${page + 1}/${pages}`, s, at: sv.at, page, pages };
+  if (!brs.length) return { error: `Bạn chưa mở chi nhánh nào (dữ liệu cập nhật ${stamp(sv.at)}). Vào tab Chi nhánh trong game để mở chi nhánh đầu tiên.` };
+  const open = s.ph === 'open', shop = clip(s.pf?.nm || s.name || 'Tiệm hoa', 40);
+  const infos = brs.slice(0, 5).map(b => brInfo(s, b));
+  const idx = view === 'all' ? -1 : Math.min(Math.max(0, Number(view) || 0), infos.length - 1);
+
+  if (idx < 0) { // ---- tổng quan ----
+    const pngs = await Promise.all(infos.map(x => R.renderRow(s, brRowSpec(x))));
+    const sell = infos.filter(x => x.selling).length, tot = infos.reduce((a, x) => a + x.fl, 0), wg = infos.filter(x => !x.b.pause).reduce((a, x) => a + x.wage, 0);
+    return { payload: layout([
+      `${H('Chi nhánh', EM.shop)}\n-# ${EM.a} ${shop} · ${infos.length} chi nhánh · ${open ? 'đang mở bán' : 'chưa mở bán'}`,
+      `${EM.ok} **Đang bán:** ${sell}/${infos.length} chi nhánh\n${EM.box} **Tổng hoa trong kho:** ${tot}\n${EM.a} **Lương chi nhánh/ngày:** ${vnd(wg)}`,
+      { sep: true },
+      ...pngs.map((_, k) => ({ img: `attachment://progress${k}.png` })),
+      { sep: true },
+      `-# ${EM.tip} Bấm nút CN bên dưới để xem đủ thông tin từng chi nhánh.`,
+      { row: brButtons(owner, brs, -1) },
+      { row: brCtl(owner, 'all') },
+      `-# ${EM.a} Justaseed • dữ liệu ${stamp(sv.at)}`,
+    ], { files: pngs.map((bf, k) => new AttachmentBuilder(bf, { name: `progress${k}.png` })), attachments: [] }) };
+  }
+
+  // ---- chi tiết một chi nhánh ----
+  const x = infos[idx], b = x.b;
+  const png = await R.renderRow(s, brRowSpec(x));
+  const { f, p } = brStockText(x.st);
+  const info = [
+    `${EM.a} **Tình trạng:** ${x.state}${!b.pause && x.why.length ? ` (${x.why.join(', ')})` : ''}`,
+    `${EM.b} **Cấp:** ${b.l}/${BR_MAXL} · **Thị phần:** ${Math.round(BR_SHARE(b.l || 1) * 100)}%`,
+    `${EM.a} **Lương nhân viên:** ${vnd(x.wage)}/ngày${b.last != null ? `\n${EM.b} **Hôm qua:** ${b.last >= 0 ? '+' : '-'}${vnd(Math.abs(b.last))}` : ''}`,
+  ].join('\n');
+  const prog = x.selling
+    ? `${EM.ok} **Tiến trình hôm nay** — ${Math.round(x.dp * 100)}%\nĐã bán **${Math.floor(x.r.n * x.dp)}/${x.r.n}** đơn · doanh thu **${vnd(Math.round(x.r.rev * x.dp))}**${x.r.lost ? `\nKhách chưa được phục vụ: **${Math.floor(x.r.lost * x.dp)}/${x.r.lost}**` : ''}`
+    : null;
+  const staff = `${EM.person} **Nhân viên (${x.stf.length}/${BR_MAXS})**\n` + (x.stf.length
+    ? x.stf.map(t => `• ${clip(t.n, 20)} · cấp ${t.l || 1}/10 · ${BR_GAP(t.l || 1)} giây/đơn · ${vnd(BR_WAGE(t.l || 1))}/ngày`).join('\n')
+    : 'Chưa có nhân viên.');
+  const stock = `${EM.box} **Kho**\n` + (f.length || p.length
+    ? [f.length ? `Hoa: ${f.join(' · ')}` : null, p.length ? `Giấy gói: ${p.join(' · ')}` : null].filter(Boolean).join('\n')
+    : 'Trống.') + (x.selling ? '\n-# Kho được trừ khi kết thúc ngày.' : '');
+  return { payload: layout([
+    `${H(`CN ${clip(b.n, 30)}`, EM.shop)}\n-# ${EM.a} ${shop} · chi nhánh ${idx + 1}/${infos.length}`,
+    { img: 'attachment://progress0.png' },
+    info,
+    prog,
+    { sep: true },
+    staff,
+    { sep: true },
+    stock,
+    { sep: true },
+    { row: brButtons(owner, brs, idx) },
+    { row: brCtl(owner, String(idx)) },
+    `-# ${EM.a} Justaseed • dữ liệu ${stamp(sv.at)}`,
+  ], { files: [new AttachmentBuilder(png, { name: 'progress0.png' })], attachments: [] }) };
+}
+async function btnBranch(i) {
+  const [, owner, view, act] = i.customId.split(':');
+  if (!owner) return;
+  if (i.user.id !== owner) return i.reply({ content: 'Nút này của người dùng lệnh.', flags: EPH });
+  await i.deferUpdate();
+  const uid = await userIdOf(owner);
+  if (!uid) return;
+  const r = await branchPayload(uid, owner, view, act !== 'g'); // chuyển chi nhánh dùng dữ liệu đã lưu (nhanh), Làm mới mới tải mới
+  if (r.error) return i.editReply({ ...layout([r.error]), attachments: [] });
+  return i.editReply(r.payload);
 }
 const progressLayout = (r, kind, owner) => {
   return layout([
     r.head,
     ...r.pngs.map((_, k) => ({ img: `attachment://progress${k}.png` })), // mỗi tiến độ một ảnh riêng
-    ...(r.extra ? [r.extra] : []),
     { sep: true },
     { row: navRow(kind, owner, r.page, r.pages) },
     `-# ${EM.a} Justaseed • dữ liệu ${stamp(r.at)}`,
@@ -617,20 +683,21 @@ async function cmdProgress(i, kind) {
   if (!R) return say(i, 'Máy chủ bot chưa cài @napi-rs/canvas nên chưa vẽ được ảnh.');
   const uid = await userIdOf(i.user.id);
   if (!uid) return say(i, NOT_LINKED);
-  const r = kind === 'ws' ? await buildWorkshop(uid) : kind === 'br' ? await buildBranch(uid) : await buildGold(uid);
+  if (kind === 'br') { const bp = await branchPayload(uid, i.user.id, 'all', true); if (bp.error) return say(i, bp.error); return i.editReply(bp.payload); }
+  const r = kind === 'ws' ? await buildWorkshop(uid) : await buildGold(uid);
   if (r.error) return say(i, r.error);
   return i.editReply(progressLayout(r, kind, i.user.id));
 }
 async function btnProgress(i) {
   const [, kind, owner, pageStr, act] = i.customId.split(':');
-  if (!owner || (kind !== 'ws' && kind !== 'gd' && kind !== 'br')) return;
+  if (!owner || (kind !== 'ws' && kind !== 'gd')) return;
   if (i.user.id !== owner) return i.reply({ content: 'Nút này của người dùng lệnh.', flags: EPH });
   await i.deferUpdate();
   const uid = await userIdOf(owner);
   if (!uid) return;
   const page = Number(pageStr) || 0;
   const fresh = act !== 'g'; // chuyển trang dùng dữ liệu đã lưu (nhanh), Làm mới mới tải mới
-  const r = kind === 'ws' ? await buildWorkshop(uid, fresh, page) : kind === 'br' ? await buildBranch(uid, fresh, page) : await buildGold(uid, fresh, page);
+  const r = kind === 'ws' ? await buildWorkshop(uid, fresh, page) : await buildGold(uid, fresh, page);
   if (r.error) return i.editReply({ ...layout([r.error]), attachments: [] });
   return i.editReply(progressLayout(r, kind, owner));
 }
@@ -732,6 +799,7 @@ async function handle(i) {
     if (i.isButton()) {
       if (i.customId.startsWith('tf:')) return await btnTransfer(i);
       if (i.customId.startsWith('pg:')) return await btnProgress(i);
+      if (i.customId.startsWith('br:')) return await btnBranch(i);
       return;
     }
     if (!i.isChatInputCommand()) return;
