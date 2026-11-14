@@ -8,7 +8,7 @@ const path = require('path');
 const { randomUUID } = require('crypto');
 const {
   SlashCommandBuilder, AttachmentBuilder,
-  ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags,
+  ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags, StringSelectMenuBuilder, StringSelectMenuOptionBuilder,
   ContainerBuilder, TextDisplayBuilder, SectionBuilder, ThumbnailBuilder,
   MediaGalleryBuilder, MediaGalleryItemBuilder, SeparatorBuilder, SeparatorSpacingSize,
 } = require('discord.js');
@@ -153,6 +153,7 @@ const BOT_EMOJI = {
   title: ['js_blossom', '🌼'], a: ['js_sprout', '🌱'], b: ['js_leaf', '🌿'], deco: ['js_sparkle', '✨'],
   gift: ['js_gift', '🎁'], card: ['js_cardj', '💳'], money: ['js_money', '💸'], ws: ['js_scissors', '🧵'],
   ring: ['js_ring', '💍'], shop: ['js_cart', '🏪'], box: ['js_bag', '📦'],
+  person: ['js_person', '🧑'], help: ['js_scroll', '📜'], tip: ['js_bulb', '💡'], star: ['js_star', '⭐'],
   ok: ['js_check', '✅'], no: ['js_x', '❌'], wait: ['js_hourglass', '⏳'], refresh: ['js_repeat', '🔄'],
 };
 const EM = Object.fromEntries(Object.entries(BOT_EMOJI).map(([k, v]) => [k, v[1]]));
@@ -660,11 +661,13 @@ const commands = [
     .addSubcommand(c => c.setName('thuenv').setDescription('Thuê nhân viên')
       .addStringOption(o => o.setName('loai').setDescription('Gói thuê').setRequired(true)
         .addChoices({ name: 'Theo ngày (500.000đ)', value: 'ngay' }, { name: 'Theo tháng (10.000.000đ, cần cấp 20)', value: 'thang' }))),
+  new SlashCommandBuilder().setName('help').setDescription('Hướng dẫn sử dụng bot Justaseed'),
 ].map(c => c.toJSON());
 
 async function handle(i) {
   try {
     if (i.isAutocomplete() && i.commandName === 'gianhang') return await autoShop(i);
+    if (i.isStringSelectMenu() && i.customId.startsWith('hp:')) return await selHelp(i);
     if (i.isButton()) {
       if (i.customId.startsWith('tf:')) return await btnTransfer(i);
       if (i.customId.startsWith('pg:')) return await btnProgress(i);
@@ -672,6 +675,7 @@ async function handle(i) {
     }
     if (!i.isChatInputCommand()) return;
     switch (i.commandName) {
+      case 'help': return await i.reply(helpLayout('home', i.user.id));
       case 'profile': return await cmdProfile(i);
       case 'daily': return await cmdDaily(i);
       case 'tien': return await cmdMoney(i);
@@ -690,11 +694,241 @@ async function handle(i) {
   }
 }
 
+// ---------------- lệnh dùng PREFIX (vd: j!daily) ----------------
+// Cần bật Message Content Intent trong Developer Portal. Đổi prefix bằng biến môi trường PREFIX (mặc định "j!").
+// Tin nhắn "riêng tư" (ephemeral) của slash không có ở prefix -> bot gửi qua tin nhắn riêng (DM) cho người dùng lệnh.
+const PREFIX = process.env.PREFIX || 'j!';
+const prefixCommands = {}; // file khác có thể thêm lệnh: prefixCommands.qr = async (i) => {...}
+const stripVN = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase().trim();
+const reactOf = (e) => { const m = /^<a?:(\w+:\d+)>$/.exec(e); return m ? m[1] : e; };
+
+// giả lập "interaction" từ một tin nhắn để dùng lại toàn bộ lệnh slash
+function prefixCtx(msg, commandName, o = {}) {
+  let sent = null, priv = false, dmFail = false, notified = false;
+  const clean = (p) => { const d = { ...p }; if (d.flags !== undefined) d.flags = Number(d.flags) & ~Number(E); return d; };
+  const send = async (p, toPriv) => {
+    const d = clean(p);
+    if (toPriv) {
+      if (dmFail) return null;
+      try {
+        const m = await msg.author.send(d);
+        if (!notified) { notified = true; msg.react(reactOf(EM.ok)).catch(() => {}); }
+        return m;
+      } catch (e) {
+        dmFail = true;
+        await msg.reply({ ...layout([`${EM.no} Mình không nhắn riêng được cho bạn. Hãy bật nhận tin nhắn riêng từ thành viên server, hoặc dùng lệnh slash \`/${commandName}\`.`]), failIfNotExists: false }).catch(() => {});
+        return null;
+      }
+    }
+    return msg.reply({ ...d, failIfNotExists: false });
+  };
+  const ctx = {
+    commandName, user: msg.author, member: msg.member, guild: msg.guild, channel: msg.channel,
+    deferred: false, replied: false,
+    options: {
+      getUser: (n) => (o.users || {})[n] || null,
+      getString: (n) => (o.strings || {})[n] ?? null,
+      getInteger: (n) => (o.ints || {})[n] ?? null,
+      getSubcommand: () => o.sub || null,
+    },
+    isChatInputCommand: () => true, isButton: () => false, isAutocomplete: () => false, isRepliable: () => true,
+    async deferReply(p = {}) {
+      priv = !!((Number(p.flags) & Number(E)) || p.ephemeral);
+      ctx.deferred = true;
+      msg.channel.sendTyping().catch(() => {});
+    },
+    async reply(p) { ctx.replied = true; sent = await send(p, !!(Number(p.flags) & Number(E))); return sent; },
+    async editReply(p) {
+      if (sent) return sent.edit(clean(p));
+      ctx.replied = true; sent = await send(p, priv); return sent;
+    },
+    async followUp(p) { return send(p, !!(Number(p.flags) & Number(E))); },
+    async deleteReply() { if (sent) { await sent.delete().catch(() => {}); sent = null; } },
+  };
+  return ctx;
+}
+
+const parseMoney = (t) => {
+  const m = /^(\d[\d.,]*)([kKmM]?)$/.exec(String(t || ''));
+  if (!m) return null;
+  const n = Number(m[1].replace(/[.,]/g, ''));
+  return Math.round(n * (/k/i.test(m[2]) ? 1e3 : /m/i.test(m[2]) ? 1e6 : 1));
+};
+
+// ---------------- /help (layout + select chọn danh mục) ----------------
+const money0 = (n) => Math.round(n).toLocaleString('vi-VN');
+function helpPages() {
+  const p = PREFIX, a = EM.a, b = EM.b;
+  return {
+    home: {
+      label: 'Tổng quan', desc: 'Giới thiệu và danh sách mục', emoji: EM.help,
+      title: 'Hướng dẫn Justaseed', ico: EM.help,
+      body: [
+        `${EM.deco} Dùng lệnh dạng **\`${p}lệnh\`** hoặc **\`/lệnh\`**, kết quả giống nhau.`,
+        `${EM.tip} Chọn một mục trong menu bên dưới để xem chi tiết.`,
+        '',
+        `${EM.person} **Tài khoản** — profile, daily, QR khôi phục`,
+        `${EM.card} **Tiền & chuyển khoản** — số dư, chuyển tiền`,
+        `${EM.shop} **Gian hàng** — mở bán, nhập hàng, thuê nhân viên`,
+        `${EM.ws} **Tiến độ** — workshop, gia công vàng`,
+        `${EM.tip} **Lưu ý** — liên kết tài khoản, tin nhắn riêng`,
+      ].join('\n'),
+    },
+    acc: {
+      label: 'Tài khoản', desc: 'Profile, daily, QR khôi phục', emoji: EM.person,
+      title: 'Tài khoản', ico: EM.person,
+      body: [
+        `${a} **\`${p}profile [@người]\`** · \`/profile\`\nXem ảnh profile của bạn hoặc của người được ping.`,
+        `${b} **\`${p}daily\`** · \`/daily\`\nNhận thưởng mỗi ngày (0 giờ sáng giờ Việt Nam). Ngày đầu **${vnd(DAILY_BASE)}**, mỗi ngày liên tiếp cộng thêm **${vnd(DAILY_STEP)}**, tối đa ${DAILY_MAXDAYS} ngày.`,
+        `${a} **\`${p}qr\`** · \`/qr\`\nNhận mã QR khôi phục tiến trình (tạo QR trong game rồi bấm "Gửi qua Discord" trước).`,
+      ].join('\n\n'),
+    },
+    money: {
+      label: 'Tiền & chuyển khoản', desc: 'Số dư, số thẻ, chuyển tiền', emoji: EM.card,
+      title: 'Tiền & chuyển khoản', ico: EM.card,
+      body: [
+        `${a} **\`${p}tien\`** · \`/tien\`\nXem số dư và số thẻ ngân hàng trong game.`,
+        `${b} **\`${p}chuyentien <số tiền> <@người | số thẻ> [lời nhắn]\`**\nVí dụ: \`${p}chuyentien 100k @ten cảm ơn nhé\` hoặc \`${p}chuyentien 500000 1234 5678 9012 3456\`.\nSố tiền mỗi lần từ **${vnd(MIN_T)}** đến **${vnd(MAX_T)}**, nhập được dạng \`100k\`, \`2m\`, \`1.500.000\`. Bot sẽ hỏi xác nhận bằng nút trước khi chuyển.`,
+      ].join('\n\n'),
+    },
+    shop: {
+      label: 'Gian hàng', desc: 'Mở bán, nhập hàng, thuê nhân viên', emoji: EM.shop,
+      title: 'Gian hàng', ico: EM.shop,
+      body: [
+        `${a} **\`${p}gianhang\`** — xem trạng thái (giai đoạn, ngày, số dư, nhân viên, kho).`,
+        `${b} **\`${p}gianhang mo\`** — mở gian hàng bán hàng.`,
+        `${a} **\`${p}gianhang thuenv ngay\`** — thuê nhân viên theo ngày (500.000đ).\n${a} **\`${p}gianhang thuenv thang\`** — thuê theo tháng (10.000.000đ, cần cấp 20).`,
+        `${b} **\`${p}gianhang nhaphang <1-${SUPPLIERS.length}> <mặt hàng> <số lượng>\`**\nVí dụ: \`${p}gianhang nhaphang 1 hồng 20\` (số lượng 1–200, chỉ nhập được ở giai đoạn chuẩn bị).`,
+        SUPPLIERS.map((x, n) => `-# ${n + 1}. ${x.n}: ${x.items.map(k => NAMES[k]).join(', ')}`).join('\n'),
+      ].join('\n\n'),
+    },
+    prog: {
+      label: 'Tiến độ', desc: 'Workshop và gia công vàng', emoji: EM.ws,
+      title: 'Tiến độ', ico: EM.ws,
+      body: [
+        `${a} **\`${p}workshop\`** · \`/workshop\`\nXem tiến độ các mẻ workshop đang làm.`,
+        `${b} **\`${p}vang\`** · \`/vang\`\nXem tiến độ gia công vàng ở Tiệm vàng.`,
+        `${EM.refresh} Bấm nút **Làm mới** dưới tin nhắn để cập nhật tiến độ.`,
+      ].join('\n\n'),
+    },
+    tips: {
+      label: 'Lưu ý', desc: 'Liên kết tài khoản, tin nhắn riêng', emoji: EM.tip,
+      title: 'Lưu ý', ico: EM.tip,
+      body: [
+        `${a} Cần vào game, **đăng nhập bằng Discord** và chơi một lúc để tiến trình được lưu lên đám mây, bot mới đọc được dữ liệu của bạn.`,
+        `${b} Với lệnh dạng \`${p}\`, các lệnh riêng tư (daily, tien, gianhang, qr) được gửi qua **tin nhắn riêng**. Hãy bật nhận tin nhắn riêng từ thành viên server.`,
+        `${a} Mỗi lúc chỉ chạy một lệnh gian hàng, hãy đợi lệnh trước xong rồi dùng tiếp.`,
+        `${b} Nhiều lệnh cần game đang mở để xử lý; nếu chưa kịp, lệnh sẽ chạy ngay khi bạn mở game.`,
+      ].join('\n\n'),
+    },
+  };
+}
+function helpLayout(cat = 'home', owner = '0') {
+  const pages = helpPages();
+  const pg = pages[cat] || pages.home;
+  const select = new StringSelectMenuBuilder()
+    .setCustomId(`hp:${owner}`)
+    .setPlaceholder('Chọn danh mục để xem lệnh')
+    .addOptions(Object.entries(pages).map(([k, v]) =>
+      new StringSelectMenuOptionBuilder().setValue(k).setLabel(v.label).setDescription(v.desc).setEmoji(v.emoji).setDefault(k === cat)));
+  return layout([
+    H(pg.title, pg.ico),
+    { sep: true },
+    pg.body,
+    { sep: true },
+    { row: new ActionRowBuilder().addComponents(select) },
+    { row: linkRow() },
+    `-# ${EM.a} Justaseed • prefix \`${PREFIX}\``,
+  ]);
+}
+async function selHelp(i) {
+  const owner = i.customId.split(':')[1];
+  if (owner !== '0' && i.user.id !== owner) return i.reply({ ...layout(['Menu này của người dùng lệnh. Hãy gõ lệnh help để mở menu riêng của bạn.']), flags: V2 | E });
+  return i.update(helpLayout(i.values[0], owner));
+}
+
+async function userFrom(msg, token) {
+  const id = (/^<@!?(\d{17,20})>$/.exec(token || '') || /^(\d{17,20})$/.exec(token || '') || [])[1];
+  if (!id) return null;
+  return msg.mentions.users.get(id) || (await client.users.fetch(id).catch(() => null));
+}
+
+async function onMessage(msg) {
+  if (msg.author.bot || !msg.inGuild() || msg.content.slice(0, PREFIX.length).toLowerCase() !== PREFIX.toLowerCase()) return;
+  const parts = msg.content.slice(PREFIX.length).trim().split(/\s+/).filter(Boolean);
+  const cmd = stripVN(parts.shift() || '');
+  if (!cmd) return;
+  const args = parts;
+  let name = null, o = {}, run = null;
+  const usage = (t) => msg.reply({ ...layout([`${EM.no} ${t}`]), failIfNotExists: false }).catch(() => {});
+
+  try {
+    if (['help', 'lenh', 'h'].includes(cmd)) return void msg.reply({ ...helpLayout('home', msg.author.id), failIfNotExists: false });
+    if (['profile', 'p', 'hoso'].includes(cmd)) {
+      name = 'profile'; run = cmdProfile;
+      if (args[0]) { const u = await userFrom(msg, args[0]); if (!u) return usage(`Cú pháp: \`${PREFIX}profile [@người]\``); o.users = { nguoi: u }; }
+    } else if (['daily', 'diemdanh'].includes(cmd)) { name = 'daily'; run = cmdDaily; }
+    else if (['tien', 'vi', 'money', 'bal'].includes(cmd)) { name = 'tien'; run = cmdMoney; }
+    else if (['workshop', 'ws'].includes(cmd)) { name = 'workshop'; run = (i) => cmdProgress(i, 'ws'); }
+    else if (['vang', 'gold'].includes(cmd)) { name = 'vang'; run = (i) => cmdProgress(i, 'gd'); }
+    else if (['chuyentien', 'ck', 'pay', 'transfer'].includes(cmd)) {
+      name = 'chuyentien'; run = cmdTransfer;
+      const mention = msg.mentions.users.first();
+      let rest = args.join(' ').replace(/<@!?\d+>/g, ' ').replace(/\s+/g, ' ').trim();
+      const tok = rest.split(' ')[0];
+      const amt = parseMoney(tok);
+      if (!amt) return usage(`Cú pháp: \`${PREFIX}chuyentien <số tiền> <@người | số thẻ 16 số> [lời nhắn]\` — vd \`${PREFIX}chuyentien 100k @ten\``);
+      rest = rest.slice(tok.length).trim();
+      o.ints = { sotien: amt }; o.strings = {}; o.users = {};
+      if (mention) { o.users.nguoi = mention; o.strings.loinhan = rest; }
+      else {
+        const c = /^((?:\d{4}[ -]?){3}\d{4})\b\s*(.*)$/.exec(rest);
+        const idUser = !c ? await userFrom(msg, rest.split(' ')[0]) : null;
+        if (c) { o.strings.sothe = c[1]; o.strings.loinhan = c[2]; }
+        else if (idUser) { o.users.nguoi = idUser; o.strings.loinhan = rest.split(' ').slice(1).join(' '); }
+        else return usage('Hãy ping người nhận hoặc nhập số thẻ 16 số.');
+      }
+    } else if (['gianhang', 'shop', 'gh'].includes(cmd)) {
+      name = 'gianhang'; run = cmdShop;
+      const sub = stripVN(args[0] || 'trangthai');
+      if (['trangthai', 'tt', 'status'].includes(sub)) o.sub = 'trangthai';
+      else if (['mo', 'open'].includes(sub)) o.sub = 'mo';
+      else if (['thuenv', 'thue', 'hire'].includes(sub)) {
+        o.sub = 'thuenv';
+        const l = stripVN(args[1]);
+        if (!['ngay', 'thang'].includes(l)) return usage(`Cú pháp: \`${PREFIX}gianhang thuenv ngay\` hoặc \`${PREFIX}gianhang thuenv thang\``);
+        o.strings = { loai: l };
+      } else if (['nhaphang', 'nhap', 'restock'].includes(sub)) {
+        o.sub = 'nhaphang';
+        const si = parseInt(args[1], 10) - 1, q = parseInt(args[args.length - 1], 10);
+        const want = stripVN(args.slice(2, -1).join(' '));
+        const pool = SUPPLIERS[si]?.items || [];
+        const id = pool.find(k => k === want || stripVN(NAMES[k]) === want) || pool.find(k => stripVN(NAMES[k]).includes(want) && want);
+        if (!SUPPLIERS[si] || !id || !(q >= 1 && q <= 200)) {
+          return usage(`Cú pháp: \`${PREFIX}gianhang nhaphang <1-${SUPPLIERS.length}> <mặt hàng> <số lượng 1-200>\` — vd \`${PREFIX}gianhang nhaphang 1 hồng 20\`\n${SUPPLIERS.map((x, n) => `${n + 1}. ${x.n}: ${x.items.map(k => NAMES[k]).join(', ')}`).join('\n')}`);
+        }
+        o.ints = { nhacungcap: si, soluong: q }; o.strings = { mathang: id };
+      } else return usage(`Lệnh con: \`trangthai\`, \`mo\`, \`nhaphang\`, \`thuenv\`. Xem \`${PREFIX}help\`.`);
+    } else if (prefixCommands[cmd]) { name = cmd; run = prefixCommands[cmd]; }
+    else return;
+
+    const ctx = prefixCtx(msg, name, o);
+    try { await run(ctx); }
+    catch (err) {
+      console.error('[extra] lỗi lệnh prefix', name, err);
+      const m = layout(['Có lỗi xảy ra, thử lại sau nhé.']);
+      if (ctx.deferred || ctx.replied) await ctx.editReply({ ...m, attachments: [] }).catch(() => {});
+      else await msg.reply({ ...m, failIfNotExists: false }).catch(() => {});
+    }
+  } catch (err) { console.error('[extra] lỗi prefix', err); }
+}
+
 function init(discordClient, sb) {
   client = discordClient; supabase = sb;
   client.on('interactionCreate', handle);
+  client.on('messageCreate', onMessage);
   client.once('ready', () => loadBotEmojis().catch(e => console.error('[extra] không nạp được emoji bot:', e.message)));
   client.once('ready', () => refreshLinks().then(() => console.log(`[extra] đã nạp ${linkCache.size} tài khoản liên kết`)).catch(e => console.error('[extra]', e.message)));
 }
 
-module.exports = { commands, init };
+module.exports = { commands, init, prefixCommands, PREFIX };

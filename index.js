@@ -13,7 +13,7 @@ const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] // MessageContent: bật trong Developer Portal để dùng lệnh prefix
 });
 
 const commands = [
@@ -46,9 +46,7 @@ client.once('ready', async () => {
   }
 });
 
-client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isChatInputCommand() || interaction.commandName !== 'qr') return;
-
+async function cmdQr(interaction) {
   await interaction.deferReply({ ephemeral: true });
 
   try {
@@ -81,7 +79,12 @@ client.on('interactionCreate', async (interaction) => {
     console.error(err);
     await interaction.editReply(qrLayout(['Có lỗi khi gửi QR. Thử lại sau.']));
   }
+}
+
+client.on('interactionCreate', (interaction) => {
+  if (interaction.isChatInputCommand() && interaction.commandName === 'qr') return cmdQr(interaction);
 });
+extra.prefixCommands.qr = cmdQr; // dùng được cả dạng prefix: !qr
 
 client.login(TOKEN);
 extra.init(client, supabase); // bật các lệnh mở rộng
