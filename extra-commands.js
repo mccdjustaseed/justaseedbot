@@ -7,21 +7,15 @@ const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
 const {
-  SlashCommandBuilder, EmbedBuilder, AttachmentBuilder,
+  SlashCommandBuilder, AttachmentBuilder,
   ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags,
+  ContainerBuilder, TextDisplayBuilder, SectionBuilder, ThumbnailBuilder,
+  MediaGalleryBuilder, MediaGalleryItemBuilder, SeparatorBuilder, SeparatorSpacingSize,
 } = require('discord.js');
 
 let Cv = null;
 try { Cv = require('@napi-rs/canvas'); } catch (e) { console.error('[extra] thiếu @napi-rs/canvas, các lệnh ảnh sẽ không chạy'); }
-if (Cv) {
-  try {
-    const dir = path.join(__dirname, 'fonts');
-    if (fs.existsSync(dir)) fs.readdirSync(dir).filter(f => /\.(ttf|otf)$/i.test(f))
-      .forEach(f => Cv.GlobalFonts.registerFromPath(path.join(dir, f)));
-  } catch (e) { console.error('[extra] lỗi nạp font:', e.message); }
-}
-const FONT = '"Baloo 2", "Onest", "DejaVu Sans", "Noto Sans", sans-serif';
-const EMOJI_FONT = '"Noto Color Emoji", "Apple Color Emoji", "Segoe UI Emoji"';
+const R = require('./render')(Cv); // bộ vẽ ảnh theo giao diện game + màu chủ đề người chơi
 
 // ---------------- cấu hình ----------------
 const DAILY_BASE = Number(process.env.DAILY_BASE) || 150000;   // ngày đầu của chuỗi
@@ -61,7 +55,6 @@ const GOLD_TYPES = {
   pendant: 'Mặt dây', bangle: 'Vòng tay', charm: 'Charm',
 };
 const TITLES = [[1, 'Hạt giống'], [3, 'Chồi non'], [5, 'Chủ tiệm hoa'], [8, 'Nghệ nhân'], [12, 'Bậc thầy'], [18, 'Huyền thoại']];
-const FRAMES = ['#bfe8c6', '#4fb06f', '#5aa9e6', '#b39ddb', '#ffc83d', '#ff6fa0'];
 const lvOf = (x) => { let l = 1; while (30 * l * (l + 1) <= x) l++; return l; };
 const cum = (l) => 30 * (l - 1) * l;
 const titleOf = (lv) => TITLES.filter(t => lv >= t[0]).pop()[1];
@@ -113,6 +106,66 @@ async function loadSave(userId) {
   return { s: decodeSave(data.data), money: Math.round(Number(data.money) || 0), at: new Date(data.updated_at).getTime() };
 }
 
+// Đọc save MỚI NHẤT: nhờ game đẩy save lên ngay (lệnh 'sync') thay vì đợi chu kỳ lưu định kỳ.
+// Game đang tắt thì không chờ, dùng bản lưu gần nhất (và nhớ 60 giây để khỏi chờ lại).
+const syncMiss = new Map();
+async function loadFresh(uid) {
+  const cached = await loadSave(uid);
+  if (cached && Date.now() - cached.at < 8000) return cached;
+  if (Date.now() - (syncMiss.get(uid) || 0) < 60000) return cached;
+  try {
+    const id = await enqueue(uid, 'sync', {});
+    const r = await waitAction(id, 4000, 250);
+    if (!r) {
+      syncMiss.set(uid, Date.now());
+      supabase.from('bot_actions').update({ status: 'failed', result: 'bot: game không online' })
+        .eq('id', id).eq('status', 'pending').then(() => {}, () => {});
+      return cached;
+    }
+    if (r.status === 'done') return (await loadSave(uid)) || cached;
+  } catch (e) { console.error('[extra] sync lỗi:', e.message); }
+  return cached;
+}
+
+// Màu chủ đề của người chơi (lấy từ hồ sơ công khai, cache 5 phút) để tô màu các tin nhắn không cần đọc save
+const colCache = new Map();
+async function colOf(uid) {
+  const h = colCache.get(uid);
+  if (h && Date.now() - h.at < 300000) return h.c;
+  let c = null;
+  try {
+    const { data } = await supabase.from('shop_public').select('game_avatar').eq('user_id', uid).maybeSingle();
+    const raw = String(data?.game_avatar || '');
+    if (raw.startsWith('gav:')) c = JSON.parse(raw.slice(4)).col;
+  } catch (e) { /* dùng màu mặc định */ }
+  c = /^#[0-9a-f]{6}$/i.test(c || '') ? c : '#4fb06f';
+  colCache.set(uid, { at: Date.now(), c });
+  return c;
+}
+
+// ---------------- tin nhắn dạng layout (Components V2) ----------------
+const V2 = MessageFlags.IsComponentsV2;
+const DEF_COL = '#4fb06f', BAD_COL = '#d9534f';
+const stamp = (ms) => `<t:${Math.floor((ms || Date.now()) / 1000)}:R>`;
+const GAME_URL = 'https://justaseed.xyz/';
+const linkRow = () => new ActionRowBuilder().addComponents(
+  new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Chơi Justaseed').setEmoji('🌱').setURL(GAME_URL));
+// blocks: chuỗi = text | {sep:true} | {img:'attachment://x.png'} | {row: ActionRowBuilder}
+function box(accent, blocks) {
+  const c = new ContainerBuilder().setAccentColor(parseInt(String(accent || DEF_COL).slice(1), 16));
+  for (const b of blocks.filter(Boolean)) {
+    if (typeof b === 'string') c.addTextDisplayComponents(new TextDisplayBuilder().setContent(b.slice(0, 3900)));
+    else if (b.sep) c.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small));
+    else if (b.img) c.addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL(b.img)));
+    else if (b.row) c.addActionRowComponents(b.row);
+  }
+  return c;
+}
+const layout = (accent, blocks, extra = {}) =>
+  ({ components: [box(accent, blocks)], flags: V2, allowedMentions: { parse: [] }, ...extra });
+const say = (i, text, accent) =>
+  i.editReply(layout(accent || (/^(❌|Không|Chưa|Sai|Lệnh)/.test(String(text)) ? BAD_COL : DEF_COL), [String(text)]));
+
 // ---------------- hàng đợi lệnh bot -> game ----------------
 async function enqueue(userId, kind, payload) {
   const { data, error } = await supabase.from('bot_actions')
@@ -120,10 +173,10 @@ async function enqueue(userId, kind, payload) {
   if (error) throw error;
   return data.id;
 }
-async function waitAction(id, ms = WAIT_MS) {
+async function waitAction(id, ms = WAIT_MS, step = 350) {
   const end = Date.now() + ms;
   while (Date.now() < end) {
-    await sleep(1500);
+    await sleep(step); // hỏi dồn 0,35s/lần (trước là 1,5s) vì game nhận lệnh gần như tức thì qua realtime
     const { data } = await supabase.from('bot_actions').select('status,result').eq('id', id).maybeSingle();
     if (data && (data.status === 'done' || data.status === 'failed')) return data;
   }
@@ -139,138 +192,60 @@ const QUEUED = (id, mins) =>
 
 const busyUsers = new Set();
 async function withLock(userId, i, fn) {
-  if (busyUsers.has(userId)) return i.editReply('Bạn đang có một lệnh khác đang xử lý, đợi một chút nhé.');
+  if (busyUsers.has(userId)) return say(i, 'Bạn đang có một lệnh khác đang xử lý, đợi một chút nhé.');
   busyUsers.add(userId);
   try { return await fn(); } finally { busyUsers.delete(userId); }
 }
 
-// ---------------- vẽ ảnh ----------------
-function rr(ctx, x, y, w, h, r, fill) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
-  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
-}
-function txt(ctx, t, x, y, size, color, weight = 600, align = 'left', maxW) {
-  ctx.font = `${weight} ${size}px ${FONT}`;
-  ctx.fillStyle = color; ctx.textAlign = align; ctx.textBaseline = 'alphabetic';
-  if (maxW) ctx.fillText(String(t), x, y, maxW); else ctx.fillText(String(t), x, y);
-}
-function bar(ctx, x, y, w, h, pct, c1 = '#4fb06f', c2 = '#8ad7a4', bg = 'rgba(30,70,45,.15)') {
-  pct = Math.max(0, Math.min(1, pct));
-  rr(ctx, x, y, w, h, h / 2, bg);
-  if (pct > 0) {
-    const g = ctx.createLinearGradient(x, 0, x + w, 0); g.addColorStop(0, c1); g.addColorStop(1, c2);
-    rr(ctx, x, y, Math.max(h, w * pct), h, h / 2, g);
-  }
-}
-async function imgFrom(src) {
-  if (!src || !Cv) return null;
-  try {
-    if (Buffer.isBuffer(src)) return await Cv.loadImage(src);
-    const s = String(src);
-    if (s.startsWith('data:')) return await Cv.loadImage(Buffer.from(s.split(',')[1], 'base64'));
-    if (/^https?:\/\//.test(s)) {
-      const r = await fetch(s); if (!r.ok) return null;
-      return await Cv.loadImage(Buffer.from(await r.arrayBuffer()));
-    }
-  } catch (e) { /* bỏ qua ảnh lỗi */ }
-  return null;
-}
-
-async function renderProfile(p) {
-  const W = 960, H = 560, c = Cv.createCanvas(W, H), ctx = c.getContext('2d');
-  const s = p.s, xp = s.xp || 0, lv = lvOf(xp), a = cum(lv), b = cum(lv + 1);
-  const bg = ctx.createLinearGradient(0, 0, 0, H); bg.addColorStop(0, '#f3fbf5'); bg.addColorStop(1, '#d9f0e2');
-  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
-  const hd = ctx.createLinearGradient(0, 0, W, 0); hd.addColorStop(0, '#2e7d57'); hd.addColorStop(.6, '#4fb06f'); hd.addColorStop(1, '#7fd0f5');
-  ctx.fillStyle = hd; ctx.fillRect(0, 0, W, 190);
-
-  const cx = 130, cy = 175, R = 88;
-  ctx.beginPath(); ctx.arc(cx, cy, R + 8, 0, Math.PI * 2); ctx.fillStyle = FRAMES[(s.pf && s.pf.fr) || 0] || '#fff'; ctx.fill();
-  ctx.save(); ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.clip();
-  if (p.avatar) ctx.drawImage(p.avatar, cx - R, cy - R, R * 2, R * 2);
-  else { ctx.fillStyle = '#bfe8c6'; ctx.fillRect(cx - R, cy - R, R * 2, R * 2); txt(ctx, '🌱', cx, cy + 22, 70, '#2e7d57', 400, 'center'); }
-  ctx.restore();
-
-  const name = clip((s.pf && s.pf.nm) || s.name || p.discordName || 'Chủ tiệm', 22);
-  txt(ctx, name, 250, 82, 48, '#ffffff', 800, 'left', 660);
-  txt(ctx, clip(s.name || 'Tiệm hoa', 30), 250, 122, 28, 'rgba(255,255,255,.92)', 600, 'left', 660);
-  txt(ctx, `Cấp ${lv} · ${titleOf(lv)}`, 250, 160, 26, 'rgba(255,255,255,.85)', 600);
-  txt(ctx, `@${clip(p.discordName, 24)}`, W - 40, 50, 22, 'rgba(255,255,255,.8)', 600, 'right');
-
-  txt(ctx, `Kinh nghiệm ${Math.round(xp - a).toLocaleString('vi-VN')} / ${Math.round(b - a).toLocaleString('vi-VN')}`, 40, 292, 24, '#35604a', 600);
-  txt(ctx, `Cấp ${lv + 1}`, W - 40, 292, 24, '#35604a', 600, 'right');
-  bar(ctx, 40, 304, W - 80, 22, (xp - a) / Math.max(1, b - a));
-
-  const wsLv = Object.values(s.ws || {}).reduce((t, w) => t + (1 + Math.floor(Math.sqrt(((w && w.xp) || 0) / 25))), 0);
-  const stats = [
-    ['Ngày', `${s.day || 1}`], ['Số dư', vnd(p.money)], ['Khách đã phục vụ', (s.sv || 0).toLocaleString('vi-VN')],
-    ['Doanh thu', vnd(s.rev)], ['Uy tín', `${(Number(s.rep) || 0).toFixed(1)} ★`], ['Đánh giá 5 sao', `${s.five || 0}`],
-  ];
-  const tw = 288, th = 92, gx = 40, gy = 350;
-  stats.forEach((st, i) => {
-    const x = gx + (i % 3) * (tw + 20), y = gy + Math.floor(i / 3) * (th + 16);
-    rr(ctx, x, y, tw, th, 18, 'rgba(255,255,255,.85)');
-    txt(ctx, st[0], x + 18, y + 34, 21, '#5f8a73', 600);
-    txt(ctx, st[1], x + 18, y + 72, 32, '#1f4a35', 800, 'left', tw - 30);
-  });
-  txt(ctx, `Workshop tổng cấp ${wsLv} · Justaseed · justaseed.xyz`, W / 2, H - 14, 18, '#6c9a82', 600, 'center');
-  return c.toBuffer('image/png');
-}
-
-async function renderProgress(title, subtitle, rows) {
-  const W = 960, RH = 132, H = 150 + rows.length * RH + 20, c = Cv.createCanvas(W, H), ctx = c.getContext('2d');
-  const bg = ctx.createLinearGradient(0, 0, 0, H); bg.addColorStop(0, '#f3fbf5'); bg.addColorStop(1, '#d9f0e2');
-  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
-  const hd = ctx.createLinearGradient(0, 0, W, 0); hd.addColorStop(0, '#2e7d57'); hd.addColorStop(1, '#7fd0f5');
-  ctx.fillStyle = hd; ctx.fillRect(0, 0, W, 112);
-  txt(ctx, title, 40, 56, 40, '#fff', 800, 'left', 880);
-  txt(ctx, subtitle, 40, 94, 22, 'rgba(255,255,255,.9)', 600, 'left', 880);
-  const hasEmoji = Cv.GlobalFonts.has && Cv.GlobalFonts.has('Noto Color Emoji');
-  rows.forEach((r, i) => {
-    const y = 132 + i * RH;
-    rr(ctx, 30, y, W - 60, RH - 14, 22, 'rgba(255,255,255,.9)');
-    const done = r.pct >= 1;
-    rr(ctx, 48, y + 16, 84, 84, 20, done ? '#ffe9a8' : '#dff3e6');
-    if (hasEmoji) { ctx.font = `52px ${EMOJI_FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#000'; ctx.fillText(r.icon, 90, y + 60); }
-    else txt(ctx, String(r.name).trim().charAt(0).toUpperCase(), 90, y + 76, 52, '#2e7d57', 800, 'center');
-    txt(ctx, r.name, 150, y + 44, 30, '#1f4a35', 800, 'left', 560);
-    txt(ctx, r.sub, 150, y + 74, 21, '#5f8a73', 600, 'left', 560);
-    txt(ctx, r.right, W - 52, y + 44, 28, done ? '#b8860b' : '#2e7d57', 800, 'right', 280);
-    bar(ctx, 150, y + 86, W - 220, 16, r.pct, done ? '#e0b43c' : '#4fb06f', done ? '#ffe38a' : '#8ad7a4');
-    txt(ctx, `${Math.round(Math.min(1, r.pct) * 100)}%`, W - 52, y + 102, 20, '#35604a', 700, 'right');
-  });
-  return c.toBuffer('image/png');
-}
-
 // ---------------- /profile ----------------
+const parseGav = (raw) => { try { raw = String(raw || ''); return raw.startsWith('gav:') ? JSON.parse(raw.slice(4)) : {}; } catch (e) { return {}; } };
 async function cmdProfile(i) {
   await i.deferReply();
-  if (!Cv) return i.editReply('Máy chủ bot chưa cài @napi-rs/canvas nên chưa vẽ được ảnh.');
+  if (!R) return say(i, 'Máy chủ bot chưa cài @napi-rs/canvas nên chưa vẽ được ảnh.');
   const target = i.options.getUser('nguoi') || i.user;
+  const self = target.id === i.user.id;
   const uid = await userIdOf(target.id);
-  if (!uid) return i.editReply(target.id === i.user.id ? NOT_LINKED : `${target.username} chưa liên kết tài khoản game.`);
-  const sv = await loadSave(uid);
-  if (!sv) return i.editReply(target.id === i.user.id ? NO_SAVE : `${target.username} chưa có tiến trình lưu trên đám mây.`);
+  if (!uid) return say(i, self ? NOT_LINKED : `${target.username} chưa liên kết tài khoản game.`);
 
-  let avatar = null;
-  try {
-    const { data } = await supabase.from('shop_public').select('game_avatar').eq('user_id', uid).maybeSingle();
-    const raw = String(data?.game_avatar || '');
-    if (raw.startsWith('gav:')) avatar = await imgFrom(JSON.parse(raw.slice(4)).av);
-    else if (raw) avatar = await imgFrom(raw);
-  } catch (e) { /* dùng avatar Discord */ }
-  if (!avatar) avatar = await imgFrom(target.displayAvatarURL({ extension: 'png', size: 256 }));
+  // đọc save (mới nhất nếu là mình) và ảnh đại diện công khai cùng lúc
+  const [sv, pub] = await Promise.all([
+    self ? loadFresh(uid) : loadSave(uid),
+    supabase.from('shop_public').select('game_avatar').eq('user_id', uid).maybeSingle().then(r => r.data, () => null),
+  ]);
+  if (!sv) return say(i, self ? NO_SAVE : `${target.username} chưa có tiến trình lưu trên đám mây.`);
 
-  const png = await renderProfile({ s: sv.s, money: sv.money, avatar, discordName: target.username });
-  await i.editReply({
-    content: `Profile của **${clip(target.displayName || target.username, 40)}**`,
-    files: [new AttachmentBuilder(png, { name: 'profile.png' })],
-    allowedMentions: { parse: [] },
+  const s = sv.s, pf = s.pf || {}, gav = parseGav(pub?.game_avatar);
+  const [avatar, cover] = await Promise.all([
+    R.imgFrom(gav.av, gav.av ? `av:${uid}:${gav.av.length}` : null)
+      .then(a => a || R.imgFrom(target.displayAvatarURL({ extension: 'png', size: 256 }))),
+    gav.cv ? R.imgFrom(gav.cv, `cv:${uid}:${gav.cv.length}`) : null,
+  ]);
+
+  const xp = s.xp || 0, lv = lvOf(xp), a = cum(lv), b = cum(lv + 1);
+  const wsLv = Object.values(s.ws || {}).reduce((t, w) => t + (1 + Math.floor(Math.sqrt(((w && w.xp) || 0) / 25))), 0);
+  const name = clip(pf.nm || s.name || target.displayName || 'Chủ tiệm', 26);
+  const png = await R.renderProfile({
+    s, avatar, cover, name, lv, xpIn: xp - a, xpNeed: b - a, fr: pf.fr ?? gav.fr, afr: pf.afr ?? gav.afr,
+    title: titleOf(lv), discordName: target.username,
+    subtitle: `${titleOf(lv)}${pf.bio || gav.bio ? ' · ' + clip(pf.bio || gav.bio, 60) : ''}`,
+    stats: [
+      { icon: '📅', label: 'Ngày', value: String(s.day || 1) },
+      { icon: '💰', label: 'Số dư', value: vnd(sv.money), accent: true },
+      { icon: '🧑', label: 'Khách đã phục vụ', value: (s.sv || 0).toLocaleString('vi-VN') },
+      { icon: '📈', label: 'Doanh thu', value: vnd(s.rev) },
+      { icon: '⭐', label: 'Uy tín', value: (Number(s.rep) || 0).toFixed(1) },
+      { icon: '🏅', label: 'Đánh giá 5 sao', value: String(s.five || 0) },
+    ],
+    footer: `${clip(s.name || 'Tiệm hoa', 30)} · Workshop tổng cấp ${wsLv} · justaseed.xyz`,
   });
+  const T = R.themeOf(s);
+  return i.editReply(layout(T.col, [
+    `### 🌱 Profile của ${clip(target.displayName || target.username, 40)}`,
+    { img: 'attachment://profile.png' },
+    { sep: true },
+    { row: linkRow() },
+    `-# Justaseed • dữ liệu ${stamp(sv.at)}`,
+  ], { files: [new AttachmentBuilder(png, { name: 'profile.png' })] }));
 }
 
 // ---------------- /daily ----------------
@@ -278,16 +253,17 @@ const vnDate = (off = 0) => new Date(Date.now() + 7 * 3600e3 + off * 86400e3).to
 async function cmdDaily(i) {
   await i.deferReply({ flags: E });
   const uid = await userIdOf(i.user.id);
-  if (!uid) return i.editReply(NOT_LINKED);
+  if (!uid) return say(i, NOT_LINKED);
+  const ac = await colOf(uid);
   return withLock(uid, i, async () => {
     const sv = await supabase.from('game_saves').select('user_id').eq('user_id', uid).maybeSingle();
-    if (!sv.data) return i.editReply(NO_SAVE);
+    if (!sv.data) return say(i, NO_SAVE);
 
     const today = vnDate(0), yest = vnDate(-1);
     const { data: row } = await supabase.from('bot_daily').select('*').eq('user_id', uid).maybeSingle();
     const nextMid = Math.floor(((Math.floor((Date.now() + 7 * 3600e3) / 86400e3) + 1) * 86400e3 - 7 * 3600e3) / 1000);
     if (row && row.last_day === today) {
-      return i.editReply(`Hôm nay bạn đã nhận daily rồi. Lần tới: <t:${nextMid}:R> (0 giờ sáng giờ Việt Nam). Chuỗi hiện tại: **${row.streak}** ngày.`);
+      return say(i, `### 🎁 Daily Justaseed\nHôm nay bạn đã nhận rồi. Lần tới: <t:${nextMid}:R> (0 giờ sáng giờ Việt Nam).\nChuỗi hiện tại: **${row.streak}** ngày.`, ac);
     }
     const streak = row && row.last_day === yest ? row.streak + 1 : 1;
     const amt = DAILY_BASE + (Math.min(streak, DAILY_MAXDAYS) - 1) * DAILY_STEP;
@@ -303,7 +279,7 @@ async function cmdDaily(i) {
         .eq('user_id', uid).neq('last_day', today).select('user_id');
       claimed = !r.error && (r.data || []).length > 0;
     }
-    if (!claimed) return i.editReply('Hôm nay bạn đã nhận daily rồi.');
+    if (!claimed) return say(i, 'Hôm nay bạn đã nhận daily rồi.');
 
     let id;
     try { id = await enqueue(uid, 'credit', { amt, label: `Thưởng daily (chuỗi ${streak} ngày)` }); }
@@ -314,13 +290,17 @@ async function cmdDaily(i) {
       throw e;
     }
     const res = await waitAction(id);
-    const embed = new EmbedBuilder().setColor(0x4fb06f).setTitle('🎁 Daily Justaseed')
-      .setDescription(`**+${vnd(amt)}** · chuỗi **${streak}** ngày${streak >= DAILY_MAXDAYS ? ' (tối đa)' : ''}`)
-      .setFooter({ text: `Ngày mai nhận tiếp để tăng thưởng · tối đa ${vnd(DAILY_BASE + (DAILY_MAXDAYS - 1) * DAILY_STEP)}` });
-    if (res && res.status === 'done') embed.addFields({ name: 'Trạng thái', value: 'Đã cộng vào ví trong game.' });
-    else if (res) embed.addFields({ name: 'Trạng thái', value: `Game báo lỗi: ${clip(res.result, 200)}` });
-    else embed.addFields({ name: 'Trạng thái', value: 'Tiền sẽ được cộng ngay khi bạn mở game.' });
-    return i.editReply({ embeds: [embed] });
+    const status = res && res.status === 'done' ? '✅ Đã cộng vào ví trong game.'
+      : res ? `❌ Game báo lỗi: ${clip(res.result, 200)}` : '⏳ Tiền sẽ được cộng ngay khi bạn mở game.';
+    const max = DAILY_BASE + (DAILY_MAXDAYS - 1) * DAILY_STEP;
+    return i.editReply(layout(ac, [
+      '### 🎁 Daily Justaseed',
+      `## +${vnd(amt)}`,
+      `Chuỗi **${streak}** ngày${streak >= DAILY_MAXDAYS ? ' (tối đa)' : ''}`,
+      { sep: true },
+      status,
+      `-# Ngày mai nhận tiếp để tăng thưởng · tối đa ${vnd(max)}`,
+    ]));
   });
 }
 
@@ -328,21 +308,26 @@ async function cmdDaily(i) {
 async function cmdMoney(i) {
   await i.deferReply({ flags: E });
   const uid = await userIdOf(i.user.id);
-  if (!uid) return i.editReply(NOT_LINKED);
-  const sv = await loadSave(uid);
-  if (!sv) return i.editReply(NO_SAVE);
-  const [{ data: card }, out] = await Promise.all([
+  if (!uid) return say(i, NOT_LINKED);
+  const [sv, cardRes, out] = await Promise.all([
+    loadFresh(uid),
     supabase.from('bank_cards').select('card_no').eq('user_id', uid).maybeSingle(),
     pendingOut(uid),
   ]);
-  const embed = new EmbedBuilder().setColor(0x4fb06f).setTitle('💳 Ví Justaseed')
-    .addFields(
-      { name: 'Số dư', value: `**${vnd(sv.money)}**`, inline: true },
-      { name: 'Số thẻ', value: card ? `\`${fmtCard(card.card_no)}\`` : 'Chưa có (mở tab Thẻ NH trong game)', inline: true },
-    )
-    .setFooter({ text: 'Số dư theo lần lưu gần nhất lên đám mây' }).setTimestamp(sv.at);
-  if (out > 0) embed.addFields({ name: 'Đang chờ trừ', value: vnd(out) });
-  return i.editReply({ embeds: [embed] });
+  if (!sv) return say(i, NO_SAVE);
+  const card = cardRes.data;
+  const T = R ? R.themeOf(sv.s) : { col: DEF_COL };
+  const blocks = ['### 💳 Ví Justaseed'];
+  const files = [];
+  if (R) {
+    const png = await R.renderBankCard(sv.s, { name: (sv.s.pf && sv.s.pf.nm) || sv.s.name || i.user.username, cardNo: card?.card_no, money: sv.money });
+    files.push(new AttachmentBuilder(png, { name: 'card.png' }));
+    blocks.push({ img: 'attachment://card.png' });
+  }
+  blocks.push(`**Số dư:** ${vnd(sv.money)}\n**Số thẻ:** ${card ? `\`${fmtCard(card.card_no)}\`` : 'Chưa có (mở tab Thẻ NH trong game)'}`);
+  if (out > 0) blocks.push(`⏳ **Đang chờ trừ:** ${vnd(out)}`);
+  blocks.push({ sep: true }, `-# Dữ liệu ${stamp(sv.at)}`);
+  return i.editReply(layout(T.col, blocks, { files }));
 }
 
 // ---------------- /chuyentien ----------------
@@ -350,70 +335,82 @@ const pendingTf = new Map();
 async function cmdTransfer(i) {
   await i.deferReply({ flags: E });
   const uid = await userIdOf(i.user.id);
-  if (!uid) return i.editReply(NOT_LINKED);
+  if (!uid) return say(i, NOT_LINKED);
   const amt = i.options.getInteger('sotien');
   const target = i.options.getUser('nguoi');
   const cardNo = (i.options.getString('sothe') || '').replace(/\D/g, '');
   const note = clip((i.options.getString('loinhan') || '').trim(), 60);
 
-  if (!!target === !!cardNo) return i.editReply('Hãy chọn **một** trong hai: `nguoi` (ping người nhận) hoặc `sothe` (số thẻ 16 số).');
-  if (!(amt >= MIN_T && amt <= MAX_T)) return i.editReply(`Số tiền mỗi lần từ ${vnd(MIN_T)} đến ${vnd(MAX_T)}.`);
+  if (!!target === !!cardNo) return say(i, 'Hãy chọn **một** trong hai: `nguoi` (ping người nhận) hoặc `sothe` (số thẻ 16 số).');
+  if (!(amt >= MIN_T && amt <= MAX_T)) return say(i, `Số tiền mỗi lần từ ${vnd(MIN_T)} đến ${vnd(MAX_T)}.`);
 
   let recv = null;
   if (target) {
-    if (target.bot) return i.editReply('Không thể chuyển tiền cho bot.');
+    if (target.bot) return say(i, 'Không thể chuyển tiền cho bot.');
     recv = await userIdOf(target.id);
-    if (!recv) return i.editReply(`${target.username} chưa liên kết tài khoản game.`);
+    if (!recv) return say(i, `${target.username} chưa liên kết tài khoản game.`);
   } else {
-    if (cardNo.length !== 16) return i.editReply('Số thẻ gồm 16 chữ số.');
+    if (cardNo.length !== 16) return say(i, 'Số thẻ gồm 16 chữ số.');
     const { data } = await supabase.from('bank_cards').select('user_id').eq('card_no', cardNo).maybeSingle();
-    if (!data) return i.editReply('Không tìm thấy thẻ này.');
+    if (!data) return say(i, 'Không tìm thấy thẻ này.');
     recv = data.user_id;
   }
-  if (recv === uid) return i.editReply('Không thể tự chuyển cho chính mình.');
+  if (recv === uid) return say(i, 'Không thể tự chuyển cho chính mình.');
 
-  const sv = await loadSave(uid);
-  if (!sv) return i.editReply(NO_SAVE);
-  const avail = sv.money - await pendingOut(uid);
-  if (amt > avail) return i.editReply(`Không đủ tiền. Số dư khả dụng: **${vnd(Math.max(0, avail))}**.`);
+  const [sv, out, prRes, ac] = await Promise.all([
+    loadFresh(uid), pendingOut(uid),
+    supabase.from('profiles').select('display_name,username').eq('id', recv).maybeSingle(),
+    colOf(uid),
+  ]);
+  if (!sv) return say(i, NO_SAVE);
+  const avail = sv.money - out;
+  if (amt > avail) return say(i, `Không đủ tiền. Số dư khả dụng: **${vnd(Math.max(0, avail))}**.`);
 
-  const { data: pr } = await supabase.from('profiles').select('display_name,username').eq('id', recv).maybeSingle();
+  const pr = prRes.data;
   const name = clip(pr?.display_name || pr?.username || 'Người chơi', 40);
   const tok = randomUUID().slice(0, 8);
-  pendingTf.set(tok, { from: i.user.id, uid, recv, name, amt, note, exp: Date.now() + 60000 });
+  pendingTf.set(tok, { from: i.user.id, uid, recv, name, amt, note, ac, exp: Date.now() + 60000 });
   setTimeout(() => pendingTf.delete(tok), 61000);
 
-  const embed = new EmbedBuilder().setColor(0xffc83d).setTitle('Xác nhận chuyển tiền')
-    .setDescription(`Chuyển **${vnd(amt)}** cho **${name}**${note ? `\nLời nhắn: ${note}` : ''}\n\nTiền chuyển đi không thể thu hồi.`);
-  return i.editReply({
-    embeds: [embed],
-    components: [new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`tf:ok:${tok}`).setLabel('Xác nhận').setStyle(ButtonStyle.Success),
+  return i.editReply(layout(ac, [
+    '### 💸 Xác nhận chuyển tiền',
+    `Chuyển **${vnd(amt)}** cho **${name}**${note ? `\nLời nhắn: *${note}*` : ''}`,
+    `Số dư sau khi chuyển: **${vnd(avail - amt)}**`,
+    { sep: true },
+    { row: new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`tf:ok:${tok}`).setLabel('Xác nhận').setEmoji('✅').setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId(`tf:no:${tok}`).setLabel('Hủy').setStyle(ButtonStyle.Secondary),
-    )],
-  });
+    ) },
+    '-# Tiền chuyển đi không thể thu hồi · yêu cầu hết hạn sau 60 giây',
+  ]));
 }
 async function btnTransfer(i) {
   const [, act, tok] = i.customId.split(':');
   const tf = pendingTf.get(tok);
   if (!tf || tf.from !== i.user.id || Date.now() > tf.exp) {
-    return i.update({ content: 'Yêu cầu đã hết hạn hoặc không phải của bạn.', embeds: [], components: [] });
+    return i.update(layout(BAD_COL, ['Yêu cầu đã hết hạn hoặc không phải của bạn.']));
   }
   pendingTf.delete(tok);
-  if (act === 'no') return i.update({ content: 'Đã hủy chuyển tiền.', embeds: [], components: [] });
+  if (act === 'no') return i.update(layout(tf.ac, ['Đã hủy chuyển tiền.']));
 
-  await i.update({ content: 'Đang xử lý...', embeds: [], components: [] });
+  await i.update(layout(tf.ac, ['⏳ Đang xử lý...']));
   return withLock(tf.uid, i, async () => {
     const sv = await loadSave(tf.uid);
     const avail = (sv?.money || 0) - await pendingOut(tf.uid);
-    if (tf.amt > avail) return i.editReply(`Không đủ tiền. Số dư khả dụng: **${vnd(Math.max(0, avail))}**.`);
+    if (tf.amt > avail) return say(i, `Không đủ tiền. Số dư khả dụng: **${vnd(Math.max(0, avail))}**.`);
     const id = await enqueue(tf.uid, 'transfer', {
       to_user: tf.recv, to_name: tf.name, amt: tf.amt, note: tf.note, tid: randomUUID().replace(/-/g, '').slice(0, 20),
     });
     const res = await waitAction(id);
-    if (res && res.status === 'done') return i.editReply(`✅ Đã chuyển **${vnd(tf.amt)}** cho **${tf.name}**. ${res.result ? clip(res.result, 150) : ''}`);
-    if (res) return i.editReply(`❌ Không chuyển được: ${clip(res.result, 200)}`);
-    return i.editReply(`⏳ ${QUEUED(id, 360)} Tiền chỉ bị trừ khi game xử lý lệnh.`);
+    if (res && res.status === 'done') {
+      return i.editReply(layout(tf.ac, [
+        '### ✅ Chuyển tiền thành công',
+        `Đã chuyển **${vnd(tf.amt)}** cho **${tf.name}**.${res.result ? '\n' + clip(res.result, 150) : ''}`,
+        tf.note ? `Lời nhắn: *${tf.note}*` : null,
+      ]));
+    }
+    if (res) return say(i, `❌ Không chuyển được: ${clip(res.result, 200)}`);
+    return say(i, `⏳ ${QUEUED(id, 360)} Tiền chỉ bị trừ khi game xử lý lệnh.`, tf.ac);
   });
 }
 
@@ -426,11 +423,11 @@ const leftText = (ms) => {
   return `${Math.floor(m / 60)} giờ ${m % 60} phút`;
 };
 
-async function buildWorkshop(uid) {
-  const sv = await loadSave(uid);
+async function buildWorkshop(uid, fresh = true) {
+  const sv = await (fresh ? loadFresh(uid) : loadSave(uid));
   if (!sv) return { error: NO_SAVE };
   const jobs = sv.s.wq || [], now = Date.now();
-  if (!jobs.length) return { error: 'Hiện không có mẻ workshop nào đang làm.' };
+  if (!jobs.length) return { error: 'Hiện không có mẻ workshop nào đang làm.', s: sv.s, at: sv.at };
   const rows = jobs.slice(0, 6).map(j => {
     const ty = WS_TYPES[j.t] || ['🎁', 'Workshop'], tot = Math.max(1, j.en - j.st), left = Math.max(0, j.en - now);
     const q = Number(j.it?.q);
@@ -440,15 +437,15 @@ async function buildWorkshop(uid) {
       pct: 1 - left / tot, right: left > 0 ? `còn ${leftText(left)}` : 'Xong rồi!',
     };
   });
-  const png = await renderProgress('Tiến độ Workshop', `${clip(sv.s.name || 'Tiệm hoa', 40)} · ${jobs.length} mẻ`, rows);
-  return { png, extra: jobs.length > 6 ? `+${jobs.length - 6} mẻ nữa` : '' };
+  const png = await R.renderProgress(sv.s, 'Tiến độ Workshop', `${clip((sv.s.pf && sv.s.pf.nm) || sv.s.name || 'Tiệm hoa', 40)} · ${jobs.length} mẻ`, rows, '🧵');
+  return { png, s: sv.s, at: sv.at, extra: jobs.length > 6 ? `+${jobs.length - 6} mẻ nữa` : '' };
 }
-async function buildGold(uid) {
-  const sv = await loadSave(uid);
+async function buildGold(uid, fresh = true) {
+  const sv = await (fresh ? loadFresh(uid) : loadSave(uid));
   if (!sv) return { error: NO_SAVE };
   const day = sv.s.day || 1;
   const orders = (sv.s.gd?.orders || []).filter(o => o.st === 'making');
-  if (!orders.length) return { error: 'Hiện không có đơn gia công vàng nào đang làm.' };
+  if (!orders.length) return { error: 'Hiện không có đơn gia công vàng nào đang làm.', s: sv.s, at: sv.at };
   const rows = orders.slice(0, 6).map(o => {
     const acc = o.acc ?? o.day ?? day, due = o.due ?? day, total = Math.max(1, due - acc), left = Math.max(0, due - day);
     return {
@@ -457,20 +454,27 @@ async function buildGold(uid) {
       pct: 1 - left / total, right: left > 0 ? `còn ${left} ngày` : 'Sẵn sàng nhận',
     };
   });
-  const png = await renderProgress('Tiến độ gia công vàng', `Tiệm vàng Kim Ngân · ngày game ${day}`, rows);
-  return { png, extra: orders.length > 6 ? `+${orders.length - 6} đơn nữa` : '' };
+  const png = await R.renderProgress(sv.s, 'Tiến độ gia công vàng', `Tiệm vàng Kim Ngân · ngày game ${day}`, rows, '💍');
+  return { png, s: sv.s, at: sv.at, extra: orders.length > 6 ? `+${orders.length - 6} đơn nữa` : '' };
 }
+const progressLayout = (r, kind, owner) => {
+  const T = R.themeOf(r.s);
+  return layout(T.col, [
+    { img: 'attachment://progress.png' },
+    r.extra || null,
+    { sep: true },
+    { row: refreshRow(kind, owner) },
+    `-# Justaseed • dữ liệu ${stamp(r.at)}`,
+  ], { files: [new AttachmentBuilder(r.png, { name: 'progress.png' })], attachments: [] });
+};
 async function cmdProgress(i, kind) {
   await i.deferReply();
-  if (!Cv) return i.editReply('Máy chủ bot chưa cài @napi-rs/canvas nên chưa vẽ được ảnh.');
+  if (!R) return say(i, 'Máy chủ bot chưa cài @napi-rs/canvas nên chưa vẽ được ảnh.');
   const uid = await userIdOf(i.user.id);
-  if (!uid) return i.editReply(NOT_LINKED);
+  if (!uid) return say(i, NOT_LINKED);
   const r = kind === 'ws' ? await buildWorkshop(uid) : await buildGold(uid);
-  if (r.error) return i.editReply(r.error);
-  return i.editReply({
-    content: r.extra || '', files: [new AttachmentBuilder(r.png, { name: 'progress.png' })],
-    components: [refreshRow(kind, i.user.id)], allowedMentions: { parse: [] },
-  });
+  if (r.error) return say(i, r.error, r.s ? R.themeOf(r.s).col : undefined);
+  return i.editReply(progressLayout(r, kind, i.user.id));
 }
 async function btnProgress(i) {
   const [, kind, owner] = i.customId.split(':');
@@ -479,8 +483,8 @@ async function btnProgress(i) {
   const uid = await userIdOf(owner);
   if (!uid) return;
   const r = kind === 'ws' ? await buildWorkshop(uid) : await buildGold(uid);
-  if (r.error) return i.editReply({ content: r.error, files: [], components: [] });
-  return i.editReply({ content: r.extra || '', files: [new AttachmentBuilder(r.png, { name: 'progress.png' })], components: [refreshRow(kind, owner)] });
+  if (r.error) return i.editReply({ ...layout(r.s ? R.themeOf(r.s).col : BAD_COL, [r.error]), attachments: [] });
+  return i.editReply(progressLayout(r, kind, owner));
 }
 
 // ---------------- /gianhang ----------------
@@ -489,30 +493,32 @@ async function cmdShop(i) {
   const sub = i.options.getSubcommand();
   await i.deferReply({ flags: E });
   const uid = await userIdOf(i.user.id);
-  if (!uid) return i.editReply(NOT_LINKED);
-  const sv = await loadSave(uid);
-  if (!sv) return i.editReply(NO_SAVE);
-  const s = sv.s;
+  if (!uid) return say(i, NOT_LINKED);
 
   if (sub === 'trangthai') {
+    const sv = await loadFresh(uid);
+    if (!sv) return say(i, NO_SAVE);
+    const s = sv.s, T = R ? R.themeOf(s) : { col: DEF_COL };
     const stock = [...FLOWERS, ...PAPER].map(([id, n]) => [n, s.st?.[id] || 0]).filter(x => x[1] > 0);
     const monthly = s.hm && typeof s.hm.e === 'number' && (s.hm.p || (s.day || 1) < s.hm.e);
     const staff = monthly ? `Nhân viên tháng (${s.hm.p ? 'đang nghỉ phép' : `còn ${s.hm.e - s.day} ngày`})` : s.hire ? 'Nhân viên theo ngày' : 'Chưa thuê';
-    const embed = new EmbedBuilder().setColor(0x4fb06f).setTitle(`🏪 ${clip(s.name || 'Tiệm hoa', 40)}`)
-      .addFields(
-        { name: 'Giai đoạn', value: PHASE[s.ph] || 'Không rõ', inline: true },
-        { name: 'Ngày', value: String(s.day || 1), inline: true },
-        { name: 'Số dư', value: vnd(sv.money), inline: true },
-        { name: 'Nhân viên', value: staff },
-        { name: 'Kho', value: stock.length ? stock.map(x => `${x[0]}: ${x[1]}`).join(' · ').slice(0, 1000) : 'Trống' },
-      ).setFooter({ text: 'Theo lần lưu gần nhất lên đám mây' }).setTimestamp(sv.at);
-    return i.editReply({ embeds: [embed] });
+    return i.editReply(layout(T.col, [
+      `### 🏪 ${clip(s.name || 'Tiệm hoa', 40)}`,
+      `**Giai đoạn:** ${PHASE[s.ph] || 'Không rõ'}\n**Ngày:** ${s.day || 1}\n**Số dư:** ${vnd(sv.money)}\n**Nhân viên:** ${staff}`,
+      { sep: true },
+      `**📦 Kho**\n${stock.length ? stock.map(x => `${x[0]}: **${x[1]}**`).join(' · ').slice(0, 1000) : 'Trống'}`,
+      { sep: true },
+      `-# Justaseed • dữ liệu ${stamp(sv.at)}`,
+    ]));
   }
 
+  const [sv, ac] = await Promise.all([loadFresh(uid), colOf(uid)]);
+  if (!sv) return say(i, NO_SAVE);
+  const s = sv.s;
   return withLock(uid, i, async () => {
-    let kind, payload = {}, ttl = 15, okMsg;
+    let kind, payload = {}, okMsg;
     if (sub === 'mo') {
-      if (s.ph && s.ph !== 'prep') return i.editReply(`Không mở được: tiệm đang ở giai đoạn "${PHASE[s.ph] || s.ph}".`);
+      if (s.ph && s.ph !== 'prep') return say(i, `Không mở được: tiệm đang ở giai đoạn "${PHASE[s.ph] || s.ph}".`);
       kind = 'open_day'; okMsg = 'Đã mở gian hàng, khách đang vào!';
     } else if (sub === 'thuenv') {
       const loai = i.options.getString('loai');
@@ -521,16 +527,16 @@ async function cmdShop(i) {
     } else if (sub === 'nhaphang') {
       const si = i.options.getInteger('nhacungcap'), id = i.options.getString('mathang'), q = i.options.getInteger('soluong');
       const sup = SUPPLIERS[si];
-      if (!sup || !sup.items.includes(id)) return i.editReply('Mặt hàng này không bán ở nhà cung cấp đã chọn.');
-      if (s.ph && s.ph !== 'prep') return i.editReply(`Chỉ nhập hàng được ở giai đoạn chuẩn bị (hiện: ${PHASE[s.ph] || s.ph}).`);
+      if (!sup || !sup.items.includes(id)) return say(i, 'Mặt hàng này không bán ở nhà cung cấp đã chọn.');
+      if (s.ph && s.ph !== 'prep') return say(i, `Chỉ nhập hàng được ở giai đoạn chuẩn bị (hiện: ${PHASE[s.ph] || s.ph}).`);
       kind = 'restock'; payload = { si, id, q }; okMsg = `Đã gửi lệnh nhập ${q} ${NAMES[id]}.`;
-    } else return i.editReply('Lệnh không hợp lệ.');
+    } else return say(i, 'Lệnh không hợp lệ.');
 
     const id = await enqueue(uid, kind, payload);
     const res = await waitAction(id);
-    if (res && res.status === 'done') return i.editReply(`✅ ${clip(res.result, 300) || okMsg}`);
-    if (res) return i.editReply(`❌ ${clip(res.result, 300)}`);
-    return i.editReply(`⏳ ${QUEUED(id, 15)}`);
+    if (res && res.status === 'done') return i.editReply(layout(ac, [`### ✅ Thành công`, clip(res.result, 300) || okMsg, `-# ${clip(s.name || 'Tiệm hoa', 40)}`]));
+    if (res) return say(i, `❌ ${clip(res.result, 300)}`);
+    return say(i, `⏳ ${QUEUED(id, 15)}`, ac);
   });
 }
 async function autoShop(i) {
@@ -591,8 +597,8 @@ async function handle(i) {
     console.error('[extra] lỗi lệnh', i.commandName || i.customId, err);
     try {
       const msg = 'Có lỗi xảy ra, thử lại sau nhé.';
-      if (i.deferred || i.replied) await i.editReply({ content: msg, embeds: [], components: [] });
-      else if (i.isRepliable()) await i.reply({ content: msg, flags: E });
+      if (i.deferred || i.replied) await i.editReply({ ...layout(BAD_COL, [msg]), attachments: [] });
+      else if (i.isRepliable()) await i.reply({ ...layout(BAD_COL, [msg]), flags: V2 | E });
     } catch (e) { /* bỏ qua */ }
   }
 }
