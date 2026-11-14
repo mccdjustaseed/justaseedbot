@@ -100,6 +100,7 @@ bp.init(client, extra.helpers); // bật lệnh /bot
 bp.registerPrefix(extra.prefixCommands); // j!bot ...
 afk.init(client, extra.helpers); // bật AFK
 afk.registerPrefix(extra.prefixCommands); // j!afk [lời nhắn]
+require('./tuoi-cay').init(client, supabase); // đọc kênh Tưới cây -> bảng tuoi_cay (web: Sky > Tưới cây)
 rel.setShowcase(async (spec) => { // nút "Khoe lên kênh" trong bot: đăng bài layout + thread (không ping)
   const ch = await getChannel();
   return ch ? postRelShowcase(ch, spec) : null;
