@@ -1,6 +1,7 @@
 require('dotenv').config();
 
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, AttachmentBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, AttachmentBuilder, MessageFlags,
+  ContainerBuilder, TextDisplayBuilder, MediaGalleryBuilder, MediaGalleryItemBuilder, SeparatorBuilder } = require('discord.js');
 const { createClient } = require('@supabase/supabase-js');
 const extra = require('./extra-commands'); // lệnh mở rộng: profile, daily, tiền, chuyển tiền, tiến độ, gian hàng
 
@@ -24,6 +25,17 @@ const commands = [
 ];
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
+
+// tin nhắn dạng layout (Components V2) cho /qr
+const GREEN = 0x4fb06f, BAD = 0xd9534f;
+function qrLayout(color, blocks, files) {
+  const c = new ContainerBuilder().setAccentColor(color);
+  for (const b of blocks) {
+    if (typeof b === 'string') c.addTextDisplayComponents(new TextDisplayBuilder().setContent(b));
+    else if (b.img) c.addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL(b.img)));
+  }
+  return { components: [c], flags: MessageFlags.IsComponentsV2, ...(files ? { files } : {}) };
+}
 
 client.once('ready', async () => {
   console.log('Bot online: ' + client.user.tag);
@@ -50,30 +62,25 @@ client.on('interactionCreate', async (interaction) => {
       .single();
 
     if (error || !data || !data.qr_image) {
-      return interaction.editReply('Chưa có yêu cầu QR. Hãy vào game, tạo QR rồi bấm "Gửi qua Discord".');
+      return interaction.editReply(qrLayout(BAD, ['Chưa có yêu cầu QR. Hãy vào game, tạo QR rồi bấm "Gửi qua Discord".']));
     }
 
-    const embed = new EmbedBuilder()
-      .setTitle('QR Khôi phục tiến trình Justaseed')
-      .setDescription('Quét mã QR này trong game để khôi phục tiến trình.')
-      .setColor(0x4fb06f)
-      .setImage('attachment://qr.png')
-      .setFooter({ text: 'Justaseed' });
-
-    const base64Data = data.qr_image.includes(',') 
-      ? data.qr_image.split(',')[1] 
+    const base64Data = data.qr_image.includes(',')
+      ? data.qr_image.split(',')[1]
       : data.qr_image;
     const buffer = Buffer.from(base64Data, 'base64');
     const attachment = new AttachmentBuilder(buffer, { name: 'qr.png' });
 
-    await interaction.editReply({
-      embeds: [embed],
-      files: [attachment]
-    });
+    await interaction.editReply(qrLayout(GREEN, [
+      '### 🌱 QR Khôi phục tiến trình Justaseed',
+      'Quét mã QR này trong game để khôi phục tiến trình.',
+      { img: 'attachment://qr.png' },
+      '-# Justaseed • chỉ mình bạn thấy tin nhắn này',
+    ], [attachment]));
 
   } catch (err) {
     console.error(err);
-    await interaction.editReply('Có lỗi khi gửi QR. Thử lại sau.');
+    await interaction.editReply(qrLayout(BAD, ['Có lỗi khi gửi QR. Thử lại sau.']));
   }
 });
 
