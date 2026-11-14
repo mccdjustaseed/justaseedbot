@@ -147,10 +147,27 @@ async function colOf(uid) {
 
 // ---------------- tin nhắn dạng layout (Components V2) ----------------
 const V2 = MessageFlags.IsComponentsV2;
+// bộ emoji CỦA BOT (Application Emojis, tên js_*) — không dùng emoji của server.
+// vai trò -> [tên emoji bot, emoji thường dự phòng nếu bot chưa có emoji đó]
+const BOT_EMOJI = {
+  title: ['js_blossom', '🌼'], a: ['js_sprout', '🌱'], b: ['js_leaf', '🌿'], deco: ['js_sparkle', '✨'],
+  gift: ['js_gift', '🎁'], card: ['js_cardj', '💳'], money: ['js_money', '💸'], ws: ['js_scissors', '🧵'],
+  ring: ['js_ring', '💍'], shop: ['js_cart', '🏪'], box: ['js_bag', '📦'],
+  ok: ['js_check', '✅'], no: ['js_x', '❌'], wait: ['js_hourglass', '⏳'], refresh: ['js_repeat', '🔄'],
+};
+const EM = Object.fromEntries(Object.entries(BOT_EMOJI).map(([k, v]) => [k, v[1]]));
+async function loadBotEmojis() {
+  const list = await client.application.emojis.fetch();
+  for (const [k, [name]] of Object.entries(BOT_EMOJI)) {
+    const e = list.find(x => x.name === name);
+    if (e) EM[k] = e.toString(); else console.warn(`[extra] bot chưa có emoji ${name}, dùng tạm emoji thường`);
+  }
+}
+const H = (t, ico) => `### ${ico || EM.title} ${t} ${ico || EM.title}`; // tiêu đề layout
 const stamp = (ms) => `<t:${Math.floor((ms || Date.now()) / 1000)}:R>`;
 const GAME_URL = 'https://justaseed.xyz/';
 const linkRow = () => new ActionRowBuilder().addComponents(
-  new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Chơi Justaseed').setEmoji('🌱').setURL(GAME_URL));
+  new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Chơi Justaseed').setEmoji(EM.a).setURL(GAME_URL));
 // blocks: chuỗi = text | {sep:true} | {img:'attachment://x.png'} | {row: ActionRowBuilder}
 // Tin nhắn của các lệnh KHÔNG dùng màu (không có accent color) — chỉ là khung layout trơn.
 function box(blocks) {
@@ -278,11 +295,11 @@ async function cmdProfile(i) {
   });
   const T = R.themeOf(s);
   return i.editReply(layout([
-    `### 🌱 Profile của ${clip(target.displayName || target.username, 40)}`,
+    H(`Profile của ${clip(target.displayName || target.username, 40)}`),
     { img: 'attachment://profile.png' },
     { sep: true },
     { row: linkRow() },
-    `-# Justaseed • dữ liệu ${stamp(sv.at)}`,
+    `-# ${EM.a} Justaseed • dữ liệu ${stamp(sv.at)}`,
   ], { files: [new AttachmentBuilder(png, { name: 'profile.png' })] }));
 }
 
@@ -300,7 +317,7 @@ async function cmdDaily(i) {
     const { data: row } = await supabase.from('bot_daily').select('*').eq('user_id', uid).maybeSingle();
     const nextMid = Math.floor(((Math.floor((Date.now() + 7 * 3600e3) / 86400e3) + 1) * 86400e3 - 7 * 3600e3) / 1000);
     if (row && row.last_day === today) {
-      return say(i, `### 🎁 Daily Justaseed\nHôm nay bạn đã nhận rồi. Lần tới: <t:${nextMid}:R> (0 giờ sáng giờ Việt Nam).\nChuỗi hiện tại: **${row.streak}** ngày.`);
+      return say(i, `${H('Daily Justaseed', EM.gift)}\n${EM.deco} Hôm nay bạn đã nhận rồi. Lần tới: <t:${nextMid}:R> (0 giờ sáng giờ Việt Nam).\nChuỗi hiện tại: **${row.streak}** ngày.`);
     }
     const streak = row && row.last_day === yest ? row.streak + 1 : 1;
     const amt = DAILY_BASE + (Math.min(streak, DAILY_MAXDAYS) - 1) * DAILY_STEP;
@@ -327,11 +344,11 @@ async function cmdDaily(i) {
       throw e;
     }
     const res = await waitAction(id);
-    const status = res && res.status === 'done' ? '✅ Đã cộng vào ví trong game.'
-      : res ? `❌ Game báo lỗi: ${clip(res.result, 200)}` : '⏳ Tiền sẽ được cộng ngay khi bạn mở game.';
+    const status = res && res.status === 'done' ? `${EM.ok} Đã cộng vào ví trong game.`
+      : res ? `${EM.no} Game báo lỗi: ${clip(res.result, 200)}` : `${EM.wait} Tiền sẽ được cộng ngay khi bạn mở game.`;
     const max = DAILY_BASE + (DAILY_MAXDAYS - 1) * DAILY_STEP;
     return i.editReply(layout([
-      '### 🎁 Daily Justaseed',
+      H('Daily Justaseed', EM.gift),
       `## +${vnd(amt)}`,
       `Chuỗi **${streak}** ngày${streak >= DAILY_MAXDAYS ? ' (tối đa)' : ''}`,
       { sep: true },
@@ -353,15 +370,15 @@ async function cmdMoney(i) {
   ]);
   if (!sv) return say(i, NO_SAVE);
   const card = cardRes.data;
-  const blocks = ['### 💳 Ví Justaseed'];
+  const blocks = [H('Ví Justaseed', EM.card)];
   const files = [];
   if (R) {
     const png = await R.renderBankCard(sv.s, { name: (sv.s.pf && sv.s.pf.nm) || sv.s.name || i.user.username, cardNo: card?.card_no, money: sv.money });
     files.push(new AttachmentBuilder(png, { name: 'card.png' }));
     blocks.push({ img: 'attachment://card.png' });
   }
-  blocks.push(`**Số dư:** ${vnd(sv.money)}\n**Số thẻ:** ${card ? `\`${fmtCard(card.card_no)}\`` : 'Chưa có (mở tab Thẻ NH trong game)'}`);
-  if (out > 0) blocks.push(`⏳ **Đang chờ trừ:** ${vnd(out)}`);
+  blocks.push(`${EM.a} **Số dư:** ${vnd(sv.money)}\n${EM.b} **Số thẻ:** ${card ? `\`${fmtCard(card.card_no)}\`` : 'Chưa có (mở tab Thẻ NH trong game)'}`);
+  if (out > 0) blocks.push(`${EM.wait} **Đang chờ trừ:** ${vnd(out)}`);
   blocks.push({ sep: true }, `-# Dữ liệu ${stamp(sv.at)}`);
   return i.editReply(layout(blocks, { files }));
 }
@@ -414,13 +431,13 @@ async function cmdTransfer(i) {
   }, 61000);
 
   return i.editReply(layout([
-    '### 💸 Xác nhận chuyển tiền',
+    H('Xác nhận chuyển tiền', EM.money),
     `Chuyển **${vnd(amt)}** cho **${name}**${note ? `\nLời nhắn: *${note}*` : ''}`,
     hide ? null : `Số dư sau khi chuyển: **${vnd(avail - amt)}**`,
     { sep: true },
     { row: new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`tf:ok:${tok}`).setLabel('Xác nhận').setEmoji('✅').setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId(`tf:no:${tok}`).setLabel('Hủy').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`tf:ok:${tok}`).setLabel('Xác nhận').setEmoji(EM.ok).setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`tf:no:${tok}`).setLabel('Hủy').setEmoji(EM.no).setStyle(ButtonStyle.Secondary),
     ) },
     '-# Tiền chuyển đi không thể thu hồi · yêu cầu hết hạn sau 60 giây',
   ]));
@@ -434,7 +451,7 @@ async function btnTransfer(i) {
   pendingTf.delete(tok);
   if (act === 'no') return i.update(layout(['Đã hủy chuyển tiền.']));
 
-  await i.update(layout(['⏳ Đang xử lý...']));
+  await i.update(layout([`${EM.wait} Đang xử lý...`]));
   return withLock(tf.uid, i, async () => {
     const sv = await loadSave(tf.uid);
     const before = sv?.money || 0;
@@ -467,22 +484,22 @@ async function btnTransfer(i) {
         }
       } catch (e) { console.error('[extra] không vẽ được thẻ ngân hàng:', e.message); }
       return i.editReply(layout([
-        '### ✅ Chuyển tiền thành công',
+        H('Chuyển tiền thành công', EM.ok),
         `<@${i.user.id}> đã chuyển **${vnd(tf.amt)}** cho **${tf.name}**.${res.result ? '\n' + clip(res.result, 150) : ''}`,
         tf.note ? `Lời nhắn: *${tf.note}*` : null,
         ...card,
         { sep: true },
-        `-# Justaseed • ${stamp()}`,
+        `-# ${EM.a} Justaseed • ${stamp()}`,
       ], { files, attachments: [] }));
     }
-    if (res) return say(i, `❌ Không chuyển được: ${clip(res.result, 200)}`);
-    return say(i, `⏳ ${QUEUED(id, 360)} Tiền chỉ bị trừ khi game xử lý lệnh.`);
+    if (res) return say(i, `${EM.no} Không chuyển được: ${clip(res.result, 200)}`);
+    return say(i, `${EM.wait} ${QUEUED(id, 360)} Tiền chỉ bị trừ khi game xử lý lệnh.`);
   });
 }
 
 // ---------------- /workshop, /vang ----------------
 const refreshRow = (kind, owner) => new ActionRowBuilder().addComponents(
-  new ButtonBuilder().setCustomId(`pg:${kind}:${owner}`).setLabel('Làm mới').setEmoji('🔄').setStyle(ButtonStyle.Secondary));
+  new ButtonBuilder().setCustomId(`pg:${kind}:${owner}`).setLabel('Làm mới').setEmoji(EM.refresh).setStyle(ButtonStyle.Secondary));
 const leftText = (ms) => {
   const m = Math.ceil(ms / 60000);
   if (m < 60) return `${Math.max(1, m)} phút`;
@@ -506,7 +523,7 @@ async function buildWorkshop(uid, fresh = true) {
     };
   }));
   const pngs = await Promise.all(rows.map(r => R.renderRow(sv.s, r)));
-  return { pngs, head: `### 🧵 Tiến độ Workshop\n-# ${clip((sv.s.pf && sv.s.pf.nm) || sv.s.name || 'Tiệm hoa', 40)} · ${jobs.length} mẻ`, s: sv.s, at: sv.at, extra: jobs.length > 6 ? `+${jobs.length - 6} mẻ nữa` : '' };
+  return { pngs, head: `${H('Tiến độ Workshop', EM.ws)}\n-# ${EM.a} ${clip((sv.s.pf && sv.s.pf.nm) || sv.s.name || 'Tiệm hoa', 40)} · ${jobs.length} mẻ`, s: sv.s, at: sv.at, extra: jobs.length > 6 ? `+${jobs.length - 6} mẻ nữa` : '' };
 }
 async function buildGold(uid, fresh = true) {
   const sv = await (fresh ? loadFresh(uid) : loadSave(uid));
@@ -525,7 +542,7 @@ async function buildGold(uid, fresh = true) {
     };
   });
   const pngs = await Promise.all(rows.map(r => R.renderRow(sv.s, r)));
-  return { pngs, head: `### 💍 Tiến độ gia công vàng\n-# Tiệm vàng Kim Ngân · ngày game ${day}`, s: sv.s, at: sv.at, extra: orders.length > 6 ? `+${orders.length - 6} đơn nữa` : '' };
+  return { pngs, head: `${H('Tiến độ gia công vàng', EM.ring)}\n-# ${EM.a} Tiệm vàng Kim Ngân · ngày game ${day}`, s: sv.s, at: sv.at, extra: orders.length > 6 ? `+${orders.length - 6} đơn nữa` : '' };
 }
 const progressLayout = (r, kind, owner) => {
   return layout([
@@ -534,7 +551,7 @@ const progressLayout = (r, kind, owner) => {
     r.extra || null,
     { sep: true },
     { row: refreshRow(kind, owner) },
-    `-# Justaseed • dữ liệu ${stamp(r.at)}`,
+    `-# ${EM.a} Justaseed • dữ liệu ${stamp(r.at)}`,
   ], { files: r.pngs.map((b, k) => new AttachmentBuilder(b, { name: `progress${k}.png` })), attachments: [] });
 };
 async function cmdProgress(i, kind) {
@@ -573,12 +590,12 @@ async function cmdShop(i) {
     const monthly = s.hm && typeof s.hm.e === 'number' && (s.hm.p || (s.day || 1) < s.hm.e);
     const staff = monthly ? `Nhân viên tháng (${s.hm.p ? 'đang nghỉ phép' : `còn ${s.hm.e - s.day} ngày`})` : s.hire ? 'Nhân viên theo ngày' : 'Chưa thuê';
     return i.editReply(layout([
-      `### 🏪 ${clip(s.name || 'Tiệm hoa', 40)}`,
-      `**Giai đoạn:** ${PHASE[s.ph] || 'Không rõ'}\n**Ngày:** ${s.day || 1}\n**Số dư:** ${vnd(sv.money)}\n**Nhân viên:** ${staff}`,
+      H(clip(s.name || 'Tiệm hoa', 40), EM.shop),
+      `${EM.a} **Giai đoạn:** ${PHASE[s.ph] || 'Không rõ'}\n${EM.b} **Ngày:** ${s.day || 1}\n${EM.a} **Số dư:** ${vnd(sv.money)}\n${EM.b} **Nhân viên:** ${staff}`,
       { sep: true },
-      `**📦 Kho**\n${stock.length ? stock.map(x => `${x[0]}: **${x[1]}**`).join(' · ').slice(0, 1000) : 'Trống'}`,
+      `${EM.box} **Kho**\n${stock.length ? stock.map(x => `${x[0]}: **${x[1]}**`).join(' · ').slice(0, 1000) : 'Trống'}`,
       { sep: true },
-      `-# Justaseed • dữ liệu ${stamp(sv.at)}`,
+      `-# ${EM.a} Justaseed • dữ liệu ${stamp(sv.at)}`,
     ]));
   }
 
@@ -604,9 +621,9 @@ async function cmdShop(i) {
 
     const id = await enqueue(uid, kind, payload);
     const res = await waitAction(id);
-    if (res && res.status === 'done') return i.editReply(layout([`### ✅ Thành công`, clip(res.result, 300) || okMsg, `-# ${clip(s.name || 'Tiệm hoa', 40)}`]));
-    if (res) return say(i, `❌ ${clip(res.result, 300)}`);
-    return say(i, `⏳ ${QUEUED(id, 15)}`);
+    if (res && res.status === 'done') return i.editReply(layout([H('Thành công', EM.ok), clip(res.result, 300) || okMsg, `-# ${clip(s.name || 'Tiệm hoa', 40)}`]));
+    if (res) return say(i, `${EM.no} ${clip(res.result, 300)}`);
+    return say(i, `${EM.wait} ${QUEUED(id, 15)}`);
   });
 }
 async function autoShop(i) {
@@ -676,6 +693,7 @@ async function handle(i) {
 function init(discordClient, sb) {
   client = discordClient; supabase = sb;
   client.on('interactionCreate', handle);
+  client.once('ready', () => loadBotEmojis().catch(e => console.error('[extra] không nạp được emoji bot:', e.message)));
   client.once('ready', () => refreshLinks().then(() => console.log(`[extra] đã nạp ${linkCache.size} tài khoản liên kết`)).catch(e => console.error('[extra]', e.message)));
 }
 

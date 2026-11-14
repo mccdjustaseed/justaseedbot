@@ -108,10 +108,17 @@ let postingSummaries = false;
 let postingShares = false;
 let sharesAgain = false; // có bài đến trong lúc đang đăng thì chạy lại ngay
 
-const EM_FLOWERS = '<a:tinyyellowflowers:1569016131426066512>';
-const EM_SUNFLOWER = '<:sunflower_art:1569015850617413703>';
-const EM_LEAF = '<a:pixelleaf:1569016035875750028>';
-const EM_DECO = '<:emoji_143:1569013514968760360>';
+// emoji CỦA BOT (Application Emojis, tên js_*) — không dùng emoji server; thiếu thì dùng tạm emoji thường
+const BOT_EMOJI = { title: ['js_blossom', '🌼'], a: ['js_sprout', '🌱'], b: ['js_leaf', '🌿'], deco: ['js_sparkle', '✨'] };
+const EM = Object.fromEntries(Object.entries(BOT_EMOJI).map(([k, v]) => [k, v[1]]));
+async function loadBotEmojis() {
+  const list = await client.application.emojis.fetch();
+  for (const [k, [name]] of Object.entries(BOT_EMOJI)) {
+    const e = list.find(x => x.name === name);
+    if (e) EM[k] = e.toString(); else console.warn(`[summary] bot chưa có emoji ${name}, dùng tạm emoji thường`);
+  }
+}
+client.once('ready', () => loadBotEmojis().catch(e => console.error('[summary] không nạp được emoji bot:', e.message)));
 
 // ---------- tiện ích dùng chung ----------
 const toBuf = (s) => Buffer.from(String(s).includes(',') ? String(s).split(',')[1] : String(s), 'base64');
@@ -126,7 +133,7 @@ const linkRow = () =>
     new SummaryButton()
       .setStyle(SummaryButtonStyle.Link)
       .setLabel('Chơi Justaseed')
-      .setEmoji('🌱')
+      .setEmoji(EM.a)
       .setURL(GAME_URL)
   );
 
@@ -135,7 +142,7 @@ function addFooter(container, when) {
   container.addSeparatorComponents(new SummarySeparator());
   container.addActionRowComponents(linkRow());
   container.addTextDisplayComponents(
-    new SummaryText().setContent(`-# ${EM_SUNFLOWER} Justaseed • <t:${when}:R>`)
+    new SummaryText().setContent(`-# ${EM.a} Justaseed • <t:${when}:R>`)
   );
 }
 
@@ -214,16 +221,16 @@ async function postDailySummaries() {
         const container = new SummaryContainer();
 
         container.addTextDisplayComponents(
-          new SummaryText().setContent(`### ${EM_FLOWERS} Tổng kết ngày thứ ${row.day} ${EM_FLOWERS}`)
+          new SummaryText().setContent(`### ${EM.title} Tổng kết ngày thứ ${row.day} ${EM.title}`)
         );
 
         const texts = [
           new SummaryText().setContent(
-            `${EM_SUNFLOWER} **Tên cửa hàng:** ${shop}\n${EM_LEAF} **Chủ shop:** ${owner}`.slice(0, 1000)
+            `${EM.a} **Tên cửa hàng:** ${shop}\n${EM.b} **Chủ shop:** ${owner}`.slice(0, 1000)
           ),
         ];
         const caption = String(row.caption || '').trim();
-        if (caption) texts.push(new SummaryText().setContent(`${EM_DECO} ${caption.slice(0, 300)}`));
+        if (caption) texts.push(new SummaryText().setContent(`${EM.deco} ${caption.slice(0, 300)}`));
 
         container.addSectionComponents(
           new SummarySection()
@@ -279,28 +286,28 @@ async function sendWorkshop(channel, row) {
   const maker = who(p.maker_id, p.maker_name, 'Không rõ');
 
   const lines = [
-    `${EM_SUNFLOWER} **Vật phẩm:** ${clip(p.name, 60)}`,
-    `${EM_LEAF} **Loại:** ${wsEmoji} ${wsType}`,
-    `${EM_SUNFLOWER} **Chất lượng:** ${q}/100 ${stars}`,
+    `${EM.a} **Vật phẩm:** ${clip(p.name, 60)}`,
+    `${EM.b} **Loại:** ${wsEmoji} ${wsType}`,
+    `${EM.a} **Chất lượng:** ${q}/100 ${stars}`,
   ];
-  if (p.materials) lines.push(`${EM_LEAF} **Nguyên liệu:** ${clip(p.materials, 300)}`);
-  if (p.scent) lines.push(`${EM_SUNFLOWER} **Hương:** ${clip(p.scent, 80)}`);
-  if (value) lines.push(`${EM_LEAF} **Giá trị:** ${value}`);
-  lines.push(`${EM_SUNFLOWER} **Người làm:** ${maker}`);
+  if (p.materials) lines.push(`${EM.b} **Nguyên liệu:** ${clip(p.materials, 300)}`);
+  if (p.scent) lines.push(`${EM.a} **Hương:** ${clip(p.scent, 80)}`);
+  if (value) lines.push(`${EM.b} **Giá trị:** ${value}`);
+  lines.push(`${EM.a} **Người làm:** ${maker}`);
   if (p.gifter_name || p.gifter_id) {
-    lines.push(`${EM_LEAF} **Người tặng:** ${who(p.gifter_id, p.gifter_name, 'Bạn bè')}`);
-    if (p.gift_msg) lines.push(`${EM_DECO} *“${clip(p.gift_msg, 80)}”*`);
+    lines.push(`${EM.b} **Người tặng:** ${who(p.gifter_id, p.gifter_name, 'Bạn bè')}`);
+    if (p.gift_msg) lines.push(`${EM.deco} *“${clip(p.gift_msg, 80)}”*`);
   }
-  lines.push(`${EM_SUNFLOWER} **Khoe bởi:** ${poster} · ${clip(p.shop_name || 'Tiệm hoa', 60)}`);
+  lines.push(`${EM.a} **Khoe bởi:** ${poster} · ${clip(p.shop_name || 'Tiệm hoa', 60)}`);
 
   const texts = [new SummaryText().setContent(lines.join('\n').slice(0, 1800))];
   const caption = String(p.caption || '').trim();
-  if (caption) texts.push(new SummaryText().setContent(`${EM_DECO} ${caption.slice(0, 300)}`));
+  if (caption) texts.push(new SummaryText().setContent(`${EM.deco} ${caption.slice(0, 300)}`));
 
   const container = new SummaryContainer();
   // tiêu đề hiện đúng loại workshop thay vì tên món
   container.addTextDisplayComponents(
-    new SummaryText().setContent(`### ${EM_FLOWERS} Workshop: ${wsEmoji} ${wsType} ${EM_FLOWERS}`)
+    new SummaryText().setContent(`### ${EM.title} Workshop: ${wsEmoji} ${wsType} ${EM.title}`)
   );
   container.addSectionComponents(
     new SummarySection()
@@ -340,23 +347,23 @@ async function sendGold(channel, row) {
   const poster = isSnow(row.discord_id) ? `<@${row.discord_id}>` : 'Chủ shop';
 
   const lines = [
-    `${EM_SUNFLOWER} **Món vàng:** ${clip(p.name, 60)}`,
-    `${EM_LEAF} **Loại:** ${goldEmoji} ${goldType}${p.custom ? ' · Đặt riêng' : ''}`,
-    `${EM_SUNFLOWER} **Trọng lượng:** ${clip(p.weight, 30)}`,
-    `${EM_LEAF} **Tuổi vàng:** ${clip(p.karat, 30)}`,
+    `${EM.a} **Món vàng:** ${clip(p.name, 60)}`,
+    `${EM.b} **Loại:** ${goldEmoji} ${goldType}${p.custom ? ' · Đặt riêng' : ''}`,
+    `${EM.a} **Trọng lượng:** ${clip(p.weight, 30)}`,
+    `${EM.b} **Tuổi vàng:** ${clip(p.karat, 30)}`,
   ];
-  if (p.gem) lines.push(`${EM_SUNFLOWER} **Đá:** ${clip(p.gem, 40)}`);
-  if (p.tone) lines.push(`${EM_LEAF} **Màu vàng:** ${clip(p.tone, 30)}`);
-  if (value) lines.push(`${EM_SUNFLOWER} **Giá trị lúc khoe:** ${value}`);
-  lines.push(`${EM_LEAF} **Khoe bởi:** ${poster} · ${clip(p.shop_name || 'Tiệm hoa', 60)}`);
+  if (p.gem) lines.push(`${EM.a} **Đá:** ${clip(p.gem, 40)}`);
+  if (p.tone) lines.push(`${EM.b} **Màu vàng:** ${clip(p.tone, 30)}`);
+  if (value) lines.push(`${EM.a} **Giá trị lúc khoe:** ${value}`);
+  lines.push(`${EM.b} **Khoe bởi:** ${poster} · ${clip(p.shop_name || 'Tiệm hoa', 60)}`);
 
   const texts = [new SummaryText().setContent(lines.join('\n').slice(0, 1800))];
   const caption = String(p.caption || '').trim();
-  if (caption) texts.push(new SummaryText().setContent(`${EM_DECO} ${caption.slice(0, 300)}`));
+  if (caption) texts.push(new SummaryText().setContent(`${EM.deco} ${caption.slice(0, 300)}`));
 
   const container = new SummaryContainer();
   container.addTextDisplayComponents(
-    new SummaryText().setContent(`### ${EM_FLOWERS} Tiệm vàng: ${goldEmoji} ${goldType} ${EM_FLOWERS}`)
+    new SummaryText().setContent(`### ${EM.title} Tiệm vàng: ${goldEmoji} ${goldType} ${EM.title}`)
   );
   container.addSectionComponents(
     new SummarySection()
@@ -386,7 +393,7 @@ async function sendCard(channel, row) {
 
   const container = new SummaryContainer();
   container.addTextDisplayComponents(
-    new SummaryText().setContent(`### ${EM_FLOWERS} ${player} đã gửi lên một danh thiếp ${EM_FLOWERS}`)
+    new SummaryText().setContent(`### ${EM.title} ${player} đã gửi lên một danh thiếp ${EM.title}`)
   );
   container.addSeparatorComponents(new SummarySeparator());
   container.addMediaGalleryComponents(
