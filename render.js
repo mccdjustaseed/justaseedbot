@@ -1,13 +1,14 @@
 // render.js : vẽ ảnh cho bot Justaseed theo giao diện trong game
 // - Màu lấy từ tiến trình của chính người chơi: s.pf.col (màu chủ đề), s.dark (chế độ tối), s.bgL / s.bgD (nền tùy chỉnh)
-// - Emoji vẽ bằng ảnh Twemoji (tải 1 lần rồi cache) nên không bị ô vuông dù máy chủ không có font emoji
+// - Icon vẽ bằng đúng bộ icon SVG của game (game-assets.js, trích từ file game) nên không bị ô vuông và giống hệt trong game
+// - Vật phẩm workshop / món vàng trong ảnh tiến độ dùng đúng hình vẽ vật phẩm của game
 // - Avatar / emoji / font đều được cache để lần vẽ sau nhanh hơn
 const fs = require('fs');
 const path = require('path');
+const { iconSvg, ICON_RE, wsItemSvg, goldSvg } = require('./game-assets');
 
 const FONT = '"Baloo 2", "Onest", "DejaVu Sans", "Noto Sans", sans-serif';      // tiêu đề / số
 const FONT_BODY = '"Onest", "Baloo 2", "DejaVu Sans", "Noto Sans", sans-serif'; // chữ thường
-const TWEMOJI = 'https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.1.0/assets/72x72/';
 const SC = 1.5; // độ nét: ảnh xuất ra = kích thước logic × 1.5
 
 // ---------- màu ----------
@@ -80,24 +81,31 @@ module.exports = function makeRenderer(Cv) {
       .forEach(f => Cv.GlobalFonts.registerFromPath(path.join(dir, f)));
   } catch (e) { console.error('[render] lỗi nạp font:', e.message); }
 
-  // ---------- cache ảnh ----------
-  const emojiCache = new Map();
-  function emojiImg(ch) {
-    if (emojiCache.has(ch)) return emojiCache.get(ch);
-    const cps = [...ch].map(c => c.codePointAt(0).toString(16));
-    const stripped = cps.includes('200d') ? cps : cps.filter(c => c !== 'fe0f');
+  // ---------- icon / hình SVG của game ----------
+  // SVG của game có thuộc tính không đặt trong ngoặc kép (cx=20) -> chuẩn hóa để bộ vẽ SVG đọc được
+  function cleanSvg(svg, w, h) {
+    svg = String(svg).replace(/(\s[\w:-]+)=([^\s"'>]+?)(?=\s|\/>|>)/g, '$1="$2"');
+    return svg.replace(/<svg\b([^>]*)>/, (m, at) =>
+      `<svg${at.replace(/\s(?:width|height)="[^"]*"/g, '')} width="${w}" height="${h}">`);
+  }
+  const svgCache = new Map();
+  function svgImage(svg, w, h) {
+    const k = w + 'x' + h + ':' + svg;
+    if (svgCache.has(k)) return svgCache.get(k);
     const p = (async () => {
-      for (const name of new Set([stripped.join('-'), cps.join('-')])) {
-        try {
-          const r = await fetch(TWEMOJI + name + '.png', { signal: AbortSignal.timeout(4000) });
-          if (r.ok) return await Cv.loadImage(Buffer.from(await r.arrayBuffer()));
-        } catch (e) { /* thử tên khác */ }
-      }
-      return null;
+      try { return await Cv.loadImage(Buffer.from(cleanSvg(svg, w, h))); }
+      catch (e) { console.error('[render] lỗi vẽ SVG:', e.message); return null; }
     })();
-    emojiCache.set(ch, p);
-    p.then(v => { if (!v) setTimeout(() => emojiCache.delete(ch), 5 * 60 * 1000); });
+    svgCache.set(k, p);
+    if (svgCache.size > 300) svgCache.delete(svgCache.keys().next().value);
     return p;
+  }
+  // icon của game theo ký tự (emoji cũ -> icon game); không có trong bộ icon thì trả null (bỏ qua, không vẽ ô vuông)
+  function emojiImg(ch, color = '#3b5a47') {
+    let svg = null;
+    try { svg = iconSvg(ch); } catch (e) { /* bỏ qua */ }
+    if (!svg) return null;
+    return svgImage(svg.replace(/currentColor/g, color), 96, 96);
   }
 
   const imgCache = new Map(); // key -> { at, p }
@@ -124,7 +132,8 @@ module.exports = function makeRenderer(Cv) {
   }
 
   // ---------- vẽ cơ bản ----------
-  const EMO_RE = /(\p{Extended_Pictographic}(?:️|[\u{1F3FB}-\u{1F3FF}])?(?:‍\p{Extended_Pictographic}(?:️|[\u{1F3FB}-\u{1F3FF}])?)*|[\u{1F1E6}-\u{1F1FF}]{2}|[#*0-9]️?⃣)/gu;
+  const EMO_RE = ICON_RE; // khớp đúng các ký tự mà bộ icon của game có (1 nhóm bắt)
+  const NO_PICT = /\p{Extended_Pictographic}\uFE0F?/gu; // emoji không có trong bộ icon: bỏ, không vẽ ô vuông
 
   function rr(ctx, x, y, w, h, r, fill, stroke, lw = 2) {
     r = Math.min(r, w / 2, h / 2);
@@ -146,18 +155,19 @@ module.exports = function makeRenderer(Cv) {
   }
   // chữ + emoji (ảnh Twemoji), tự thu nhỏ chữ nếu vượt maxW
   async function rich(ctx, t, x, y, size, color, weight = 600, align = 'left', maxW, family = FONT) {
-    const segs = String(t ?? '').split(EMO_RE).map((v, i) => ({ v, e: i % 2 === 1 })).filter(s => s.v);
-    for (const s of segs) if (s.e) s.img = await emojiImg(s.v);
+    const segs = String(t ?? '').split(EMO_RE)
+      .map((v, i) => (i % 2 === 1 ? { v, e: true } : { v: v.replace(NO_PICT, ''), e: false })).filter(s => s.v);
+    for (const s of segs) if (s.e) s.img = await emojiImg(s.v, color);
     const measure = (z) => {
       ctx.font = `${weight} ${z}px ${family}`;
-      return segs.reduce((w, s) => w + (s.e && s.img ? z * 1.12 : ctx.measureText(s.v).width), 0);
+      return segs.reduce((w, s) => w + (s.e ? (s.img ? z * 1.12 : 0) : ctx.measureText(s.v).width), 0);
     };
     let z = size, w = measure(z);
     if (maxW && w > maxW) { z = Math.max(size * 0.55, size * maxW / w); w = measure(z); }
     let cx = align === 'center' ? x - w / 2 : align === 'right' ? x - w : x;
     ctx.font = `${weight} ${z}px ${family}`; ctx.fillStyle = color; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
     for (const s of segs) {
-      if (s.e && s.img) { ctx.drawImage(s.img, cx, y - z * 0.86, z * 1.08, z * 1.08); cx += z * 1.12; }
+      if (s.e) { if (s.img) { ctx.drawImage(s.img, cx, y - z * 0.86, z * 1.08, z * 1.08); cx += z * 1.12; } }
       else { ctx.fillText(s.v, cx, y); cx += ctx.measureText(s.v).width; }
     }
     return w;
@@ -268,6 +278,23 @@ module.exports = function makeRenderer(Cv) {
   }
 
   // ---------- /workshop, /vang ----------
+  // r: { icon, svg?, name, sub, right, pct } — svg (nếu có) là hình vật phẩm của game, thay cho icon
+  async function drawRow(ctx, T, W, y, RH, r) {
+    const done = r.pct >= 1;
+    rr(ctx, 32, y, W - 64, RH - 14, 28, T.card, done ? alpha(T.gold, 0.6) : T.border, 2);
+    rr(ctx, 52, y + 17, 80, 80, 22, done ? T.goldBg : T.g, null);
+    const pic = r.svg ? await svgImage(r.svg, 256, 256) : null;
+    if (pic) { // vừa khung 64×64 giữa ô, giữ nguyên tỉ lệ
+      const k = Math.min(64 / pic.width, 64 / pic.height), w = pic.width * k, h = pic.height * k;
+      ctx.drawImage(pic, 92 - w / 2, y + 57 - h / 2, w, h);
+    } else await rich(ctx, r.icon, 92, y + 70, 44, T.ink, 600, 'center');
+    await rich(ctx, r.name, 154, y + 44, 30, T.ink, 800, 'left', 520);
+    await body(ctx, r.sub, 154, y + 72, 20, T.mut, 600, 'left', 520);
+    await rich(ctx, r.right, W - 56, y + 44, 27, done ? T.gold : T.g3, 800, 'right', 260);
+    bar(ctx, 154, y + 86, W - 244 - 64, 14, r.pct, done ? T.goldBar[0] : T.col, done ? T.goldBar[1] : mix(T.col, '#ffffff', 0.3), T.tint);
+    await body(ctx, `${Math.round(Math.min(1, r.pct) * 100)}%`, W - 56, y + 100, 19, T.mut, 700, 'right');
+  }
+
   async function renderProgress(s, title, subtitle, rows, icon) {
     const T = themeOf(s), W = 960, RH = 128, top = 188;
     const H = top + rows.length * RH + 34;
@@ -284,22 +311,12 @@ module.exports = function makeRenderer(Cv) {
     await rich(ctx, title, hx + 130, hy + 62, 40, T.ink, 800, 'left', hw - 170);
     await body(ctx, subtitle, hx + 130, hy + 98, 22, T.mut, 600, 'left', hw - 170);
 
-    for (let i = 0; i < rows.length; i++) {
-      const r = rows[i], y = top + i * RH, done = r.pct >= 1;
-      rr(ctx, 32, y, W - 64, RH - 14, 28, T.card, done ? alpha(T.gold, 0.6) : T.border, 2);
-      rr(ctx, 52, y + 17, 80, 80, 22, done ? T.goldBg : T.g, null);
-      await rich(ctx, r.icon, 92, y + 70, 44, T.ink, 600, 'center');
-      await rich(ctx, r.name, 154, y + 44, 30, T.ink, 800, 'left', 520);
-      await body(ctx, r.sub, 154, y + 72, 20, T.mut, 600, 'left', 520);
-      await rich(ctx, r.right, W - 56, y + 44, 27, done ? T.gold : T.g3, 800, 'right', 260);
-      bar(ctx, 154, y + 86, W - 244 - 64, 14, r.pct, done ? T.goldBar[0] : T.col, done ? T.goldBar[1] : mix(T.col, '#ffffff', 0.3), T.tint);
-      await body(ctx, `${Math.round(Math.min(1, r.pct) * 100)}%`, W - 56, y + 100, 19, T.mut, 700, 'right');
-    }
+    for (let i = 0; i < rows.length; i++) await drawRow(ctx, T, W, top + i * RH, RH, rows[i]);
     return out(c);
   }
 
   // ---------- /tien : thẻ ngân hàng theo màu chủ đề ----------
-  async function renderBankCard(s, { name, cardNo, money }) {
+  async function renderBankCard(s, { name, cardNo, money, hide }) {
     const T = themeOf(s), W = 860, H = 500;
     const { c, ctx } = mk(W, H);
     ctx.fillStyle = T.bg; ctx.fillRect(0, 0, W, H);
@@ -312,7 +329,7 @@ module.exports = function makeRenderer(Cv) {
     ctx.fillStyle = 'rgba(255,255,255,.07)'; ctx.beginPath(); ctx.arc(x + 60, y + h + 20, 190, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
     await rich(ctx, 'Justaseed Bank', x + 40, y + 70, 32, '#ffffff', 800);
-    await rich(ctx, '🌱', x + w - 70, y + 72, 40, '#fff', 600, 'center');
+    await rich(ctx, '🌱', x + w - 70, y + 72, 40, '#fff', 600, 'center'); // icon cây non của game
     rr(ctx, x + 40, y + 108, 74, 54, 12, '#f0d98a', 'rgba(0,0,0,.18)', 2); // chip
     ctx.strokeStyle = 'rgba(0,0,0,.2)'; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(x + 40, y + 135); ctx.lineTo(x + 114, y + 135); ctx.moveTo(x + 77, y + 108); ctx.lineTo(x + 77, y + 162); ctx.stroke();
@@ -321,11 +338,20 @@ module.exports = function makeRenderer(Cv) {
     await body(ctx, 'CHỦ THẺ', x + 40, y + 290, 17, 'rgba(255,255,255,.7)', 600);
     await rich(ctx, clip(name, 26), x + 40, y + 326, 30, '#ffffff', 800, 'left', w * 0.5);
     await body(ctx, 'SỐ DƯ', x + w - 40, y + 290, 17, 'rgba(255,255,255,.7)', 600, 'right');
-    await rich(ctx, vnd(money), x + w - 40, y + 326, 34, '#ffffff', 800, 'right', w * 0.5);
+    await rich(ctx, hide ? '••••••' : vnd(money), x + w - 40, y + 326, 34, '#ffffff', 800, 'right', w * 0.5);
     return out(c);
   }
 
-  return { renderProfile, renderProgress, renderBankCard, imgFrom, themeOf, mix };
+  // ---------- 1 ảnh = 1 tiến độ (mỗi mẻ workshop / đơn vàng một ảnh riêng) ----------
+  async function renderRow(s, r) {
+    const T = themeOf(s), W = 960, H = 170;
+    const { c, ctx } = mk(W, H);
+    page(ctx, W, H, T);
+    await drawRow(ctx, T, W, 28, 128, r);
+    return out(c);
+  }
+
+  return { renderProfile, renderProgress, renderRow, renderBankCard, imgFrom, themeOf, mix, wsItemSvg, goldSvg };
 };
 module.exports.themeOf = themeOf;
 module.exports.mix = mix;

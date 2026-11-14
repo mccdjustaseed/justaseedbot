@@ -26,10 +26,9 @@ const commands = [
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
 
-// tin nhắn dạng layout (Components V2) cho /qr
-const GREEN = 0x4fb06f, BAD = 0xd9534f;
-function qrLayout(color, blocks, files) {
-  const c = new ContainerBuilder().setAccentColor(color);
+// tin nhắn dạng layout (Components V2) cho /qr — không dùng màu (không accent color)
+function qrLayout(blocks, files) {
+  const c = new ContainerBuilder();
   for (const b of blocks) {
     if (typeof b === 'string') c.addTextDisplayComponents(new TextDisplayBuilder().setContent(b));
     else if (b.img) c.addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL(b.img)));
@@ -62,7 +61,7 @@ client.on('interactionCreate', async (interaction) => {
       .single();
 
     if (error || !data || !data.qr_image) {
-      return interaction.editReply(qrLayout(BAD, ['Chưa có yêu cầu QR. Hãy vào game, tạo QR rồi bấm "Gửi qua Discord".']));
+      return interaction.editReply(qrLayout(['Chưa có yêu cầu QR. Hãy vào game, tạo QR rồi bấm "Gửi qua Discord".']));
     }
 
     const base64Data = data.qr_image.includes(',')
@@ -71,7 +70,7 @@ client.on('interactionCreate', async (interaction) => {
     const buffer = Buffer.from(base64Data, 'base64');
     const attachment = new AttachmentBuilder(buffer, { name: 'qr.png' });
 
-    await interaction.editReply(qrLayout(GREEN, [
+    await interaction.editReply(qrLayout([
       '### 🌱 QR Khôi phục tiến trình Justaseed',
       'Quét mã QR này trong game để khôi phục tiến trình.',
       { img: 'attachment://qr.png' },
@@ -80,7 +79,7 @@ client.on('interactionCreate', async (interaction) => {
 
   } catch (err) {
     console.error(err);
-    await interaction.editReply(qrLayout(BAD, ['Có lỗi khi gửi QR. Thử lại sau.']));
+    await interaction.editReply(qrLayout(['Có lỗi khi gửi QR. Thử lại sau.']));
   }
 });
 
