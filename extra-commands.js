@@ -153,6 +153,7 @@ const BOT_EMOJI = {
   title: ['js_blossom', '🌼'], a: ['js_sprout', '🌱'], b: ['js_leaf', '🌿'], deco: ['js_sparkle', '✨'],
   gift: ['js_gift', '🎁'], card: ['js_cardj', '💳'], money: ['js_money', '💸'], ws: ['js_scissors', '🧵'],
   ring: ['js_ring', '💍'], shop: ['js_cart', '🏪'], box: ['js_bag', '📦'],
+  left: ['js_left', '◀️'], right: ['js_right', '▶️'],
   person: ['js_person', '🧑'], help: ['js_scroll', '📜'], tip: ['js_bulb', '💡'], star: ['js_star', '⭐'],
   ok: ['js_check', '✅'], no: ['js_x', '❌'], wait: ['js_hourglass', '⏳'], refresh: ['js_repeat', '🔄'],
 };
@@ -499,21 +500,28 @@ async function btnTransfer(i) {
 }
 
 // ---------------- /workshop, /vang ----------------
-const refreshRow = (kind, owner) => new ActionRowBuilder().addComponents(
-  new ButtonBuilder().setCustomId(`pg:${kind}:${owner}`).setLabel('Làm mới').setEmoji(EM.refresh).setStyle(ButtonStyle.Secondary));
+const PER_PAGE = 6; // số mẻ / đơn mỗi trang
+const pageOf = (total, page) => { const pages = Math.max(1, Math.ceil(total / PER_PAGE)); return { pages, page: Math.min(Math.max(0, Number(page) || 0), pages - 1) }; };
+// hàng nút: ◀ [trang/tổng] ▶ Làm mới. customId: pg:<kind>:<owner>:<trang>:<g=đi tới trang | r=làm mới>
+const navRow = (kind, owner, page, pages) => new ActionRowBuilder().addComponents(
+  new ButtonBuilder().setCustomId(`pg:${kind}:${owner}:${page - 1}:g`).setEmoji(EM.left).setLabel('Trước').setStyle(ButtonStyle.Primary).setDisabled(page <= 0),
+  new ButtonBuilder().setCustomId('pg:noop').setLabel(`${page + 1}/${pages}`).setStyle(ButtonStyle.Secondary).setDisabled(true),
+  new ButtonBuilder().setCustomId(`pg:${kind}:${owner}:${page + 1}:g`).setEmoji(EM.right).setLabel('Sau').setStyle(ButtonStyle.Primary).setDisabled(page >= pages - 1),
+  new ButtonBuilder().setCustomId(`pg:${kind}:${owner}:${page}:r`).setLabel('Làm mới').setEmoji(EM.refresh).setStyle(ButtonStyle.Secondary));
 const leftText = (ms) => {
   const m = Math.ceil(ms / 60000);
   if (m < 60) return `${Math.max(1, m)} phút`;
   return `${Math.floor(m / 60)} giờ ${m % 60} phút`;
 };
 
-async function buildWorkshop(uid, fresh = true) {
+async function buildWorkshop(uid, fresh = true, pageReq = 0) {
   const sv = await (fresh ? loadFresh(uid) : loadSave(uid));
   if (!sv) return { error: NO_SAVE };
   const jobs = sv.s.wq || [], now = Date.now();
   console.log(`[progress] workshop: ${jobs.length} mẻ trong save (user ${uid}, save cập nhật ${new Date(sv.at).toISOString()})`);
   if (!jobs.length) return { error: `Hiện không có mẻ workshop nào đang làm trong dữ liệu đã lưu (cập nhật ${stamp(sv.at)}). Nếu game đang có mẻ, hãy mở game vài giây để lưu lên đám mây rồi dùng lại lệnh.`, s: sv.s, at: sv.at };
-  const rows = await Promise.all(jobs.slice(0, 6).map(async j => {
+  const { pages, page } = pageOf(jobs.length, pageReq);
+  const rows = await Promise.all(jobs.slice(page * PER_PAGE, (page + 1) * PER_PAGE).map(async j => {
     const ty = WS_TYPES[j.t] || ['🎁', 'Workshop'], tot = Math.max(1, j.en - j.st), left = Math.max(0, j.en - now);
     const q = Number(j.it?.q);
     const item = await withItemImage({ ...(j.it || {}), t: (j.it && j.it.t) || j.t }); // hình vật phẩm đúng như trong game
@@ -524,16 +532,17 @@ async function buildWorkshop(uid, fresh = true) {
     };
   }));
   const pngs = await Promise.all(rows.map(r => R.renderRow(sv.s, r)));
-  return { pngs, head: `${H('Tiến độ Workshop', EM.ws)}\n-# ${EM.a} ${clip((sv.s.pf && sv.s.pf.nm) || sv.s.name || 'Tiệm hoa', 40)} · ${jobs.length} mẻ`, s: sv.s, at: sv.at, extra: jobs.length > 6 ? `+${jobs.length - 6} mẻ nữa` : '' };
+  return { pngs, head: `${H('Tiến độ Workshop', EM.ws)}\n-# ${EM.a} ${clip((sv.s.pf && sv.s.pf.nm) || sv.s.name || 'Tiệm hoa', 40)} · ${jobs.length} mẻ · Trang ${page + 1}/${pages}`, s: sv.s, at: sv.at, page, pages };
 }
-async function buildGold(uid, fresh = true) {
+async function buildGold(uid, fresh = true, pageReq = 0) {
   const sv = await (fresh ? loadFresh(uid) : loadSave(uid));
   if (!sv) return { error: NO_SAVE };
   const day = sv.s.day || 1;
   const orders = (sv.s.gd?.orders || []).filter(o => o.st === 'making');
   console.log(`[progress] vàng: ${(sv.s.gd?.orders || []).length} đơn (${orders.length} đang làm) trong save (user ${uid}, save cập nhật ${new Date(sv.at).toISOString()})`);
   if (!orders.length) return { error: `Hiện không có đơn gia công vàng nào đang làm trong dữ liệu đã lưu (cập nhật ${stamp(sv.at)}). Đơn phải đã đặt cọc (đang gia công) mới hiện ở đây.`, s: sv.s, at: sv.at };
-  const rows = orders.slice(0, 6).map(o => {
+  const { pages, page } = pageOf(orders.length, pageReq);
+  const rows = orders.slice(page * PER_PAGE, (page + 1) * PER_PAGE).map(o => {
     const acc = o.acc ?? o.day ?? day, due = o.due ?? day, total = Math.max(1, due - acc), left = Math.max(0, due - day);
     return {
       icon: '💍', name: clip(o.br?.name || 'Đơn gia công', 40),
@@ -543,15 +552,14 @@ async function buildGold(uid, fresh = true) {
     };
   });
   const pngs = await Promise.all(rows.map(r => R.renderRow(sv.s, r)));
-  return { pngs, head: `${H('Tiến độ gia công vàng', EM.ring)}\n-# ${EM.a} Tiệm vàng Kim Ngân · ngày game ${day}`, s: sv.s, at: sv.at, extra: orders.length > 6 ? `+${orders.length - 6} đơn nữa` : '' };
+  return { pngs, head: `${H('Tiến độ gia công vàng', EM.ring)}\n-# ${EM.a} Tiệm vàng Kim Ngân · ngày game ${day} · ${orders.length} đơn · Trang ${page + 1}/${pages}`, s: sv.s, at: sv.at, page, pages };
 }
 const progressLayout = (r, kind, owner) => {
   return layout([
     r.head,
     ...r.pngs.map((_, k) => ({ img: `attachment://progress${k}.png` })), // mỗi tiến độ một ảnh riêng
-    r.extra || null,
     { sep: true },
-    { row: refreshRow(kind, owner) },
+    { row: navRow(kind, owner, r.page, r.pages) },
     `-# ${EM.a} Justaseed • dữ liệu ${stamp(r.at)}`,
   ], { files: r.pngs.map((b, k) => new AttachmentBuilder(b, { name: `progress${k}.png` })), attachments: [] });
 };
@@ -565,12 +573,15 @@ async function cmdProgress(i, kind) {
   return i.editReply(progressLayout(r, kind, i.user.id));
 }
 async function btnProgress(i) {
-  const [, kind, owner] = i.customId.split(':');
+  const [, kind, owner, pageStr, act] = i.customId.split(':');
+  if (!owner || (kind !== 'ws' && kind !== 'gd')) return;
   if (i.user.id !== owner) return i.reply({ content: 'Nút này của người dùng lệnh.', flags: E });
   await i.deferUpdate();
   const uid = await userIdOf(owner);
   if (!uid) return;
-  const r = kind === 'ws' ? await buildWorkshop(uid) : await buildGold(uid);
+  const page = Number(pageStr) || 0;
+  const fresh = act !== 'g'; // chuyển trang dùng dữ liệu đã lưu (nhanh), Làm mới mới tải mới
+  const r = kind === 'ws' ? await buildWorkshop(uid, fresh, page) : await buildGold(uid, fresh, page);
   if (r.error) return i.editReply({ ...layout([r.error]), attachments: [] });
   return i.editReply(progressLayout(r, kind, owner));
 }
