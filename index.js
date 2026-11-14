@@ -5,6 +5,7 @@ const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, Attachment
 const { createClient } = require('@supabase/supabase-js');
 const extra = require('./extra-commands'); // lệnh mở rộng: profile, daily, tiền, chuyển tiền, tiến độ, gian hàng
 const rel = require('./relationship'); // hệ thống relationship: card, sơ đồ, điểm danh, nhiệm vụ
+const bp = require('./bot-profile'); // lệnh đổi trạng thái / avatar / bìa của bot (cần quyền Quản lý máy chủ)
 
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
@@ -23,7 +24,8 @@ const commands = [
     .setDescription('Nhận QR khôi phục tiến trình Justaseed')
     .toJSON(),
   ...extra.commands,
-  ...rel.commands
+  ...rel.commands,
+  ...bp.commands
 ];
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
@@ -92,6 +94,8 @@ client.login(TOKEN);
 extra.init(client, supabase); // bật các lệnh mở rộng
 rel.init(client, supabase, extra.helpers); // bật relationship
 rel.registerPrefix(extra.prefixCommands);  // j!rel ...
+bp.init(client, extra.helpers); // bật lệnh /bot
+bp.registerPrefix(extra.prefixCommands); // j!bot ...
 rel.setShowcase(async (spec) => { // nút "Khoe lên kênh" trong bot: đăng bài layout + thread (không ping)
   const ch = await getChannel();
   return ch ? postRelShowcase(ch, spec) : null;
