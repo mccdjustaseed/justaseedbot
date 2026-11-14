@@ -5,6 +5,7 @@ const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, Attachment
 const { createClient } = require('@supabase/supabase-js');
 const extra = require('./extra-commands'); // lệnh mở rộng: profile, daily, tiền, chuyển tiền, tiến độ, gian hàng
 const rel = require('./relationship'); // hệ thống relationship: card, sơ đồ, điểm danh, nhiệm vụ
+const afk = require('./afk'); // lệnh /afk, j!afk: báo vắng mặt (2 type)
 const bp = require('./bot-profile'); // lệnh đổi trạng thái / avatar / bìa của bot (cần quyền Quản lý máy chủ)
 
 const TOKEN = process.env.TOKEN;
@@ -25,7 +26,8 @@ const commands = [
     .toJSON(),
   ...extra.commands,
   ...rel.commands,
-  ...bp.commands
+  ...bp.commands,
+  ...afk.commands
 ];
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
@@ -96,6 +98,8 @@ rel.init(client, supabase, extra.helpers); // bật relationship
 rel.registerPrefix(extra.prefixCommands);  // j!rel ...
 bp.init(client, extra.helpers); // bật lệnh /bot
 bp.registerPrefix(extra.prefixCommands); // j!bot ...
+afk.init(client, extra.helpers); // bật AFK
+afk.registerPrefix(extra.prefixCommands); // j!afk [lời nhắn]
 rel.setShowcase(async (spec) => { // nút "Khoe lên kênh" trong bot: đăng bài layout + thread (không ping)
   const ch = await getChannel();
   return ch ? postRelShowcase(ch, spec) : null;
