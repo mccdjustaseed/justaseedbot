@@ -2,7 +2,7 @@
 // Web (Sky > Daily Guild) đọc bảng này và tự cập nhật bằng Realtime.
 // Cần: SUPABASE_KEY là service role key, Node 18+, bot có quyền View Channel + Read Message History ở kênh,
 //      Message Content Intent đã bật (bot hiện đã bật). Chạy file daily-guild.sql trước.
-const CHANNEL_ID = process.env.DAILY_GUILD_CHANNEL_ID || '1571136797394870324';
+const CHANNEL_ID = process.env.DAILY_GUILD_CHANNEL_ID || '1511061395788267738';
 const TABLE = 'daily_guild', BUCKET = 'dailyguild';
 const KEEP = Number(process.env.DAILY_GUILD_KEEP) || 60;   // số tin giữ lại trong bảng
 const BACKFILL = 30;                                       // số tin lấy lại khi bot khởi động
@@ -11,7 +11,7 @@ const MAX_IMG = 8 * 1024 * 1024;
 const log = (...a) => console.log('[daily-guild]', ...a);
 const err = (...a) => console.error('[daily-guild]', ...a);
 
-let supabase = null, client = null, chain = Promise.resolve();
+let supabase = null, client = null, chain = Promise.resolve(), firstSync = true;
 // xử lý lần lượt từng việc để tin sửa/xóa không đè nhau
 const queue = (fn) => { chain = chain.then(fn).catch(e => err(e && e.message || e)); return chain; };
 
@@ -57,7 +57,7 @@ function build(m) {
       text.push(...out.text); imgs.push(...out.images);
     } catch (e) { /* bỏ qua */ }
   }
-  const content = text.join('\n\n').replace(/<a?:(\w+):\d+>/g, ':$1:').trim();
+  const content = text.join('\n\n').trim();
   const a = m.author;
   return {
     message_id: m.id,
@@ -125,11 +125,12 @@ async function backfill() {
   if (!ch || !ch.messages) return err('không thấy kênh ' + CHANNEL_ID + ' (kiểm tra ID và quyền View Channel / Read Message History)');
   const msgs = await ch.messages.fetch({ limit: BACKFILL });
   const arr = [...msgs.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
-  for (const m of arr) await save(m, true);
-  // xóa khỏi bảng những tin đã bị xóa lúc bot offline
+  const full = firstSync; firstSync = false; // lần đầu sau khi bot khởi động: ghi lại tất cả (để áp dụng thay đổi cách lưu)
+  for (const m of arr) await save(m, !full);
+  // xóa khỏi bảng những tin đã bị xóa lúc bot offline (lần đầu sau khi khởi động: xóa cả tin của kênh cũ)
   const have = new Set(arr.map(m => m.id));
   let q = supabase.from(TABLE).select('message_id');
-  if (arr.length) q = q.gte('created_at', new Date(arr[0].createdTimestamp).toISOString());
+  if (arr.length && !full) q = q.gte('created_at', new Date(arr[0].createdTimestamp).toISOString());
   const { data } = await q;
   const gone = (data || []).map(r => r.message_id).filter(id => !have.has(id));
   if (gone.length) await remove(gone);
