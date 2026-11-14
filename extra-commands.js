@@ -114,10 +114,10 @@ const syncMiss = new Map();
 async function loadFresh(uid) {
   const cached = await loadSave(uid);
   if (cached && Date.now() - cached.at < 8000) return cached;
-  if (Date.now() - (syncMiss.get(uid) || 0) < 60000) return cached;
+  if (Date.now() - (syncMiss.get(uid) || 0) < 15000) return cached;
   try {
     const id = await enqueue(uid, 'sync', {});
-    const r = await waitAction(id, 4000, 250);
+    const r = await waitAction(id, 6000, 250);
     if (!r) {
       syncMiss.set(uid, Date.now());
       supabase.from('bot_actions').update({ status: 'failed', result: 'bot: game không online' })
@@ -125,7 +125,7 @@ async function loadFresh(uid) {
       return cached;
     }
     if (r.status === 'done') return (await loadSave(uid)) || cached;
-  } catch (e) { console.error('[extra] sync lỗi:', e.message); }
+  } catch (e) { syncMiss.set(uid, Date.now()); console.error('[extra] sync lỗi:', e.message); } // lỗi (vd. ràng buộc kind trong DB): tạm dùng bản lưu gần nhất
   return cached;
 }
 
@@ -493,7 +493,8 @@ async function buildWorkshop(uid, fresh = true) {
   const sv = await (fresh ? loadFresh(uid) : loadSave(uid));
   if (!sv) return { error: NO_SAVE };
   const jobs = sv.s.wq || [], now = Date.now();
-  if (!jobs.length) return { error: 'Hiện không có mẻ workshop nào đang làm.', s: sv.s, at: sv.at };
+  console.log(`[progress] workshop: ${jobs.length} mẻ trong save (user ${uid}, save cập nhật ${new Date(sv.at).toISOString()})`);
+  if (!jobs.length) return { error: `Hiện không có mẻ workshop nào đang làm trong dữ liệu đã lưu (cập nhật ${stamp(sv.at)}). Nếu game đang có mẻ, hãy mở game vài giây để lưu lên đám mây rồi dùng lại lệnh.`, s: sv.s, at: sv.at };
   const rows = await Promise.all(jobs.slice(0, 6).map(async j => {
     const ty = WS_TYPES[j.t] || ['🎁', 'Workshop'], tot = Math.max(1, j.en - j.st), left = Math.max(0, j.en - now);
     const q = Number(j.it?.q);
@@ -512,7 +513,8 @@ async function buildGold(uid, fresh = true) {
   if (!sv) return { error: NO_SAVE };
   const day = sv.s.day || 1;
   const orders = (sv.s.gd?.orders || []).filter(o => o.st === 'making');
-  if (!orders.length) return { error: 'Hiện không có đơn gia công vàng nào đang làm.', s: sv.s, at: sv.at };
+  console.log(`[progress] vàng: ${(sv.s.gd?.orders || []).length} đơn (${orders.length} đang làm) trong save (user ${uid}, save cập nhật ${new Date(sv.at).toISOString()})`);
+  if (!orders.length) return { error: `Hiện không có đơn gia công vàng nào đang làm trong dữ liệu đã lưu (cập nhật ${stamp(sv.at)}). Đơn phải đã đặt cọc (đang gia công) mới hiện ở đây.`, s: sv.s, at: sv.at };
   const rows = orders.slice(0, 6).map(o => {
     const acc = o.acc ?? o.day ?? day, due = o.due ?? day, total = Math.max(1, due - acc), left = Math.max(0, due - day);
     return {
