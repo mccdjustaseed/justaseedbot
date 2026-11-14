@@ -88,6 +88,7 @@ extra.prefixCommands.qr = cmdQr; // dùng được cả dạng prefix: !qr
 
 client.login(TOKEN);
 extra.init(client, supabase); // bật các lệnh mở rộng
+require('./daily-guild').init(client, supabase); // đọc kênh Daily Guild -> bảng daily_guild cho web
 
 // ===== ĐĂNG TỔNG KẾT / WORKSHOP / VÀNG / DANH THIẾP LÊN DISCORD (LAYOUT) =====
 const {
