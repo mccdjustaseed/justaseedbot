@@ -23,7 +23,8 @@ const DAILY_STEP = Number(process.env.DAILY_STEP) || 25000;    // cộng thêm m
 const DAILY_MAXDAYS = Number(process.env.DAILY_MAXDAYS) || 7;  // chuỗi tối đa tính thưởng
 const MIN_T = 1000, MAX_T = 10000000;                          // khớp giới hạn chuyển khoản trong game
 const WAIT_MS = 25000;                                         // chờ game xử lý lệnh
-const E = MessageFlags.Ephemeral;
+const E = 0;                              // 0 = trả lời công khai ngay tại kênh dùng lệnh (chỉ /qr trong index.js còn riêng tư)
+const EPH = MessageFlags.Ephemeral;        // chỉ dùng cho thông báo "nút này của người khác" để không làm rối kênh
 
 let supabase = null, client = null;
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -454,7 +455,7 @@ async function btnTransfer(i) {
   const tf = pendingTf.get(tok);
   // tin nhắn công khai: người khác bấm hoặc nút đã hết hạn thì chỉ báo riêng, không sửa tin chung
   if (!tf || Date.now() > tf.exp) return i.reply({ ...layout(['Yêu cầu đã hết hạn.']), flags: V2 | E });
-  if (tf.from !== i.user.id) return i.reply({ ...layout(['Nút này của người dùng lệnh.']), flags: V2 | E });
+  if (tf.from !== i.user.id) return i.reply({ ...layout(['Nút này của người dùng lệnh.']), flags: V2 | EPH });
   pendingTf.delete(tok);
   if (act === 'no') return i.update(layout(['Đã hủy chuyển tiền.']));
 
@@ -580,7 +581,7 @@ async function cmdProgress(i, kind) {
 async function btnProgress(i) {
   const [, kind, owner, pageStr, act] = i.customId.split(':');
   if (!owner || (kind !== 'ws' && kind !== 'gd')) return;
-  if (i.user.id !== owner) return i.reply({ content: 'Nút này của người dùng lệnh.', flags: E });
+  if (i.user.id !== owner) return i.reply({ content: 'Nút này của người dùng lệnh.', flags: EPH });
   await i.deferUpdate();
   const uid = await userIdOf(owner);
   if (!uid) return;
@@ -712,7 +713,7 @@ async function handle(i) {
 
 // ---------------- lệnh dùng PREFIX (vd: j!daily) ----------------
 // Cần bật Message Content Intent trong Developer Portal. Đổi prefix bằng biến môi trường PREFIX (mặc định "j!").
-// Tin nhắn "riêng tư" (ephemeral) của slash không có ở prefix -> bot gửi qua tin nhắn riêng (DM) cho người dùng lệnh.
+// Mọi lệnh trả lời công khai tại kênh dùng lệnh. Riêng /qr là riêng tư: dạng prefix thì bot gửi qua tin nhắn riêng (DM).
 const PREFIX = process.env.PREFIX || 'j!';
 const prefixCommands = {}; // file khác có thể thêm lệnh: prefixCommands.qr = async (i) => {...}
 const stripVN = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase().trim();
@@ -847,7 +848,7 @@ function helpPages() {
       title: 'Lưu ý', ico: EM.tip,
       body: [
         `${a} Cần vào game, **đăng nhập bằng Discord** và chơi một lúc để tiến trình được lưu lên đám mây, bot mới đọc được dữ liệu của bạn.`,
-        `${b} Với lệnh dạng \`${p}\`, các lệnh riêng tư (daily, tien, gianhang, qr) được gửi qua **tin nhắn riêng**. Hãy bật nhận tin nhắn riêng từ thành viên server.`,
+        `${b} Với lệnh dạng \`${p}\`, bot trả lời ngay tại kênh bạn dùng lệnh. Riêng **qr** được gửi qua **tin nhắn riêng**, hãy bật nhận tin nhắn riêng từ thành viên server.`,
         `${a} Mỗi lúc chỉ chạy một lệnh gian hàng, hãy đợi lệnh trước xong rồi dùng tiếp.`,
         `${b} Nhiều lệnh cần game đang mở để xử lý; nếu chưa kịp, lệnh sẽ chạy ngay khi bạn mở game.`,
       ].join('\n\n'),
@@ -874,7 +875,7 @@ function helpLayout(cat = 'home', owner = '0') {
 }
 async function selHelp(i) {
   const owner = i.customId.split(':')[1];
-  if (owner !== '0' && i.user.id !== owner) return i.reply({ ...layout(['Menu này của người dùng lệnh. Hãy gõ lệnh help để mở menu riêng của bạn.']), flags: V2 | E });
+  if (owner !== '0' && i.user.id !== owner) return i.reply({ ...layout(['Menu này của người dùng lệnh. Hãy gõ lệnh help để mở menu riêng của bạn.']), flags: V2 | EPH });
   return i.update(helpLayout(i.values[0], owner));
 }
 
@@ -964,6 +965,6 @@ function init(discordClient, sb) {
 
 // hàm dùng chung cho các module mở rộng khác (relationship.js)
 const helpers = {
-  userIdOf, discordIdOf, layout, H, EM, linkRow, stamp, say, clip, V2, E, NOT_LINKED, parseGav, PREFIX,
+  userIdOf, discordIdOf, layout, H, EM, linkRow, stamp, say, clip, V2, E, NOT_LINKED, parseGav, PREFIX, EPH,
 };
 module.exports = { commands, init, prefixCommands, PREFIX, helpers };

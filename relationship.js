@@ -261,8 +261,7 @@ async function resolveTarget(i, uid) { // trả về { rel } | { error } | { man
 }
 async function cmdRel(i) {
   const sub = i.options.getSubcommand();
-  const priv = sub === 'daily' || sub === 'nhiemvu' || sub === 'danhsach';
-  await i.deferReply(priv ? { flags: X.E } : {});
+  await i.deferReply(); // trả lời công khai tại kênh dùng lệnh
   if (!Cv) return X.say(i, 'Máy chủ bot chưa cài @napi-rs/canvas nên chưa vẽ được ảnh.');
   const uid = await X.userIdOf(i.user.id);
   if (!uid) return X.say(i, X.NOT_LINKED);
@@ -319,7 +318,7 @@ async function onInteraction(i) {
     if (!(i.isButton() || i.isStringSelectMenu()) || !i.customId.startsWith('rl:')) return;
     const parts = i.customId.split(':');
     const owner = parts[parts.length - 1];
-    if (i.user.id !== owner) return i.reply({ ...X.layout(['Nút này của người dùng lệnh.']), flags: X.V2 | X.E });
+    if (i.user.id !== owner) return i.reply({ ...X.layout(['Nút này của người dùng lệnh.']), flags: X.V2 | X.EPH });
     const uid = await X.userIdOf(owner);
     if (!uid) return;
 
@@ -336,8 +335,8 @@ async function onInteraction(i) {
       const { data: rel } = await supabase.from('relationships').select('*').eq('id', Number(parts[2])).maybeSingle();
       if (!rel) return;
       const msg = await questMessage(rel, uid, owner);
-      if (data && !data.ok) await i.followUp({ ...X.layout([`${em().no} ${data.msg}`]), flags: X.V2 | X.E }).catch(() => {});
-      else if (data && data.ok) await i.followUp({ ...X.layout([`${em().ok} +${data.add} XP${data.level_up ? ` · ${HEART} lên cấp ${data.level}!` : ''}`]), flags: X.V2 | X.E }).catch(() => {});
+      if (data && !data.ok) await i.followUp({ ...X.layout([`${em().no} ${data.msg}`]), flags: X.V2 }).catch(() => {});
+      else if (data && data.ok) await i.followUp({ ...X.layout([`${em().ok} +${data.add} XP${data.level_up ? ` · ${HEART} lên cấp ${data.level}!` : ''}`]), flags: X.V2 }).catch(() => {});
       return i.editReply(msg);
     }
     if (act === 'ref') { // rl:ref:<card|map>:<id>:<owner>
@@ -348,7 +347,7 @@ async function onInteraction(i) {
       return i.editReply(await cardMessage(rel, uid, owner));
     }
     if (act === 'show') { // rl:show:<card|map>:<id>:<owner>
-      await i.deferReply({ flags: X.E });
+      await i.deferReply();
       if (!showcase) return X.say(i, 'Chưa cấu hình kênh khoe.');
       let spec;
       if (parts[2] === 'map') {
@@ -368,7 +367,7 @@ async function onInteraction(i) {
     console.error('[rel] lỗi', err);
     try {
       const m = { ...X.layout(['Có lỗi xảy ra, thử lại sau nhé.']), attachments: [] };
-      if (i.deferred || i.replied) await i.editReply(m); else if (i.isRepliable()) await i.reply({ ...m, flags: X.V2 | X.E });
+      if (i.deferred || i.replied) await i.editReply(m); else if (i.isRepliable()) await i.reply({ ...m, flags: X.V2 });
     } catch (e) { /* bỏ qua */ }
   }
 }
