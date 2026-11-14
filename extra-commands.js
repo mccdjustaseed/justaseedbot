@@ -560,10 +560,53 @@ async function buildGold(uid, fresh = true, pageReq = 0) {
   const pngs = await Promise.all(rows.map(r => R.renderRow(sv.s, r)));
   return { pngs, head: `${H('Tiến độ gia công vàng', EM.ring)}\n-# ${EM.a} Tiệm vàng Kim Ngân · ngày game ${day} · ${orders.length} đơn · Trang ${page + 1}/${pages}`, s: sv.s, at: sv.at, page, pages };
 }
+async function buildBranch(uid, fresh = true, pageReq = 0) {
+  const sv = await (fresh ? loadFresh(uid) : loadSave(uid));
+  if (!sv) return { error: NO_SAVE };
+  const s = sv.s, brs = s.x2?.br || [];
+  console.log(`[progress] chi nhánh: ${brs.length} chi nhánh trong save (user ${uid}, save cập nhật ${new Date(sv.at).toISOString()})`);
+  if (!brs.length) return { error: `Bạn chưa mở chi nhánh nào (dữ liệu cập nhật ${stamp(sv.at)}). Vào tab Chi nhánh trong game để mở chi nhánh đầu tiên.`, s, at: sv.at };
+  const open = s.ph === 'open';
+  const dp = Math.max(0, Math.min(1, Number(s.x2?.dp) || 0));
+  const { pages, page } = pageOf(brs.length, pageReq);
+  const slice = brs.slice(page * PER_PAGE, (page + 1) * PER_PAGE);
+  const info = slice.map(b => {
+    const st = b.st || {};
+    const fl = FLOWERS.reduce((a, f) => a + (st[f[0]] || 0), 0), pp = ['S', 'M', 'L'].reduce((a, k) => a + (st[k] || 0), 0);
+    const why = [];
+    if (!(b.stf || []).length) why.push('chưa có nhân viên');
+    if (!fl || !pp) why.push('chưa nhập hàng');
+    return { b, st, fl, pp, why };
+  });
+  const rows = info.map(({ b, fl, pp, why }) => {
+    const r = b.plan?.r;
+    let right, pct = 0;
+    if (b.pause) right = 'Tạm nghỉ';
+    else if (open && r) {
+      pct = dp; right = `Đang bán hàng · ${Math.floor(r.n * dp)}/${r.n} đơn`;
+    } else if (why.length) right = 'Chưa sẵn sàng';
+    else right = 'Sẵn sàng';
+    return {
+      icon: '🏬', name: clip(`CN ${b.n}`, 40),
+      sub: `cấp ${b.l}/5 · ${(b.stf || []).length} nhân viên · kho ${fl} hoa, ${pp} giấy${!b.pause && why.length ? ' · ' + why.join(', ') : ''}`,
+      pct, right,
+    };
+  });
+  const pngs = await Promise.all(rows.map(r => R.renderRow(s, r)));
+  const extra = info.map(({ b, st, why }) => {
+    const items = Object.keys(st).filter(k => (st[k] || 0) > 0 && NAMES[k]).map(k => `${NAMES[k]} **${st[k]}**`);
+    const sell = open && !b.pause && b.plan;
+    const r = b.plan?.r;
+    const line = sell && r ? `\n${EM.ok} **Đang bán hàng** — ${Math.floor(r.n * dp)}/${r.n} đơn, doanh thu ${vnd(Math.round(r.rev * dp))}${r.lost ? `, ${Math.floor(r.lost * dp)}/${r.lost} khách chưa được phục vụ` : ''}` : '';
+    return `${EM.box} **Kho CN ${clip(b.n, 30)}**: ${items.length ? items.join(' · ').slice(0, 600) : 'Trống'}${line}`;
+  }).join('\n');
+  return { pngs, extra, head: `${H('Tiến độ chi nhánh', EM.shop)}\n-# ${EM.a} ${clip(s.pf?.nm || s.name || 'Tiệm hoa', 40)} · ${brs.length} chi nhánh · ${open ? 'đang mở bán' : 'chưa mở bán'} · Trang ${page + 1}/${pages}`, s, at: sv.at, page, pages };
+}
 const progressLayout = (r, kind, owner) => {
   return layout([
     r.head,
     ...r.pngs.map((_, k) => ({ img: `attachment://progress${k}.png` })), // mỗi tiến độ một ảnh riêng
+    ...(r.extra ? [r.extra] : []),
     { sep: true },
     { row: navRow(kind, owner, r.page, r.pages) },
     `-# ${EM.a} Justaseed • dữ liệu ${stamp(r.at)}`,
@@ -574,20 +617,20 @@ async function cmdProgress(i, kind) {
   if (!R) return say(i, 'Máy chủ bot chưa cài @napi-rs/canvas nên chưa vẽ được ảnh.');
   const uid = await userIdOf(i.user.id);
   if (!uid) return say(i, NOT_LINKED);
-  const r = kind === 'ws' ? await buildWorkshop(uid) : await buildGold(uid);
+  const r = kind === 'ws' ? await buildWorkshop(uid) : kind === 'br' ? await buildBranch(uid) : await buildGold(uid);
   if (r.error) return say(i, r.error);
   return i.editReply(progressLayout(r, kind, i.user.id));
 }
 async function btnProgress(i) {
   const [, kind, owner, pageStr, act] = i.customId.split(':');
-  if (!owner || (kind !== 'ws' && kind !== 'gd')) return;
+  if (!owner || (kind !== 'ws' && kind !== 'gd' && kind !== 'br')) return;
   if (i.user.id !== owner) return i.reply({ content: 'Nút này của người dùng lệnh.', flags: EPH });
   await i.deferUpdate();
   const uid = await userIdOf(owner);
   if (!uid) return;
   const page = Number(pageStr) || 0;
   const fresh = act !== 'g'; // chuyển trang dùng dữ liệu đã lưu (nhanh), Làm mới mới tải mới
-  const r = kind === 'ws' ? await buildWorkshop(uid, fresh, page) : await buildGold(uid, fresh, page);
+  const r = kind === 'ws' ? await buildWorkshop(uid, fresh, page) : kind === 'br' ? await buildBranch(uid, fresh, page) : await buildGold(uid, fresh, page);
   if (r.error) return i.editReply({ ...layout([r.error]), attachments: [] });
   return i.editReply(progressLayout(r, kind, owner));
 }
@@ -667,6 +710,7 @@ const commands = [
     .addStringOption(o => o.setName('loinhan').setDescription('Lời nhắn (tùy chọn)').setMaxLength(60)),
   new SlashCommandBuilder().setName('workshop').setDescription('Xem tiến độ các mẻ workshop đang làm'),
   new SlashCommandBuilder().setName('vang').setDescription('Xem tiến độ gia công vàng ở Tiệm vàng'),
+  new SlashCommandBuilder().setName('chinhanh').setDescription('Xem tiến trình và kho của các chi nhánh'),
   new SlashCommandBuilder().setName('gianhang').setDescription('Quản lý gian hàng ngay trên Discord')
     .addSubcommand(c => c.setName('trangthai').setDescription('Xem trạng thái gian hàng'))
     .addSubcommand(c => c.setName('mo').setDescription('Mở gian hàng bán hàng'))
@@ -699,6 +743,7 @@ async function handle(i) {
       case 'chuyentien': return await cmdTransfer(i);
       case 'workshop': return await cmdProgress(i, 'ws');
       case 'vang': return await cmdProgress(i, 'gd');
+      case 'chinhanh': return await cmdProgress(i, 'br');
       case 'gianhang': return await cmdShop(i);
     }
   } catch (err) {
@@ -788,7 +833,7 @@ function helpPages() {
         `${EM.person} **Tài khoản** — profile, daily, QR khôi phục`,
         `${EM.card} **Tiền & chuyển khoản** — số dư, chuyển tiền`,
         `${EM.shop} **Gian hàng** — mở bán, nhập hàng, thuê nhân viên`,
-        `${EM.ws} **Tiến độ** — workshop, gia công vàng`,
+        `${EM.ws} **Tiến độ** — workshop, gia công vàng, chi nhánh`,
         `💞 **Relationship** — card, sơ đồ, điểm danh cùng nhau, nhiệm vụ`,
         `${EM.tip} **Lưu ý** — liên kết tài khoản, tin nhắn riêng`,
       ].join('\n'),
@@ -822,11 +867,12 @@ function helpPages() {
       ].join('\n\n'),
     },
     prog: {
-      label: 'Tiến độ', desc: 'Workshop và gia công vàng', emoji: EM.ws,
+      label: 'Tiến độ', desc: 'Workshop, vàng và chi nhánh', emoji: EM.ws,
       title: 'Tiến độ', ico: EM.ws,
       body: [
         `${a} **\`${p}workshop\`** · \`/workshop\`\nXem tiến độ các mẻ workshop đang làm.`,
         `${b} **\`${p}vang\`** · \`/vang\`\nXem tiến độ gia công vàng ở Tiệm vàng.`,
+        `${a} **\`${p}chinhanh\`** · \`/chinhanh\` (\`${p}cn\`)\nXem tiến trình bán hàng và kho của từng chi nhánh.`,
         `${EM.refresh} Bấm nút **Làm mới** dưới tin nhắn để cập nhật tiến độ.`,
       ].join('\n\n'),
     },
@@ -903,6 +949,7 @@ async function onMessage(msg) {
     else if (['tien', 'vi', 'money', 'bal'].includes(cmd)) { name = 'tien'; run = cmdMoney; }
     else if (['workshop', 'ws'].includes(cmd)) { name = 'workshop'; run = (i) => cmdProgress(i, 'ws'); }
     else if (['vang', 'gold'].includes(cmd)) { name = 'vang'; run = (i) => cmdProgress(i, 'gd'); }
+    else if (['chinhanh', 'cn', 'branch'].includes(cmd)) { name = 'chinhanh'; run = (i) => cmdProgress(i, 'br'); }
     else if (['chuyentien', 'ck', 'pay', 'transfer'].includes(cmd)) {
       name = 'chuyentien'; run = cmdTransfer;
       const mention = msg.mentions.users.first();
