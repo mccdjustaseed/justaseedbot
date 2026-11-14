@@ -4,6 +4,7 @@ const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, Attachment
   ContainerBuilder, TextDisplayBuilder, MediaGalleryBuilder, MediaGalleryItemBuilder, SeparatorBuilder } = require('discord.js');
 const { createClient } = require('@supabase/supabase-js');
 const extra = require('./extra-commands'); // lệnh mở rộng: profile, daily, tiền, chuyển tiền, tiến độ, gian hàng
+const rel = require('./relationship'); // hệ thống relationship: card, sơ đồ, điểm danh, nhiệm vụ
 
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
@@ -21,7 +22,8 @@ const commands = [
     .setName('qr')
     .setDescription('Nhận QR khôi phục tiến trình Justaseed')
     .toJSON(),
-  ...extra.commands
+  ...extra.commands,
+  ...rel.commands
 ];
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
@@ -88,7 +90,12 @@ extra.prefixCommands.qr = cmdQr; // dùng được cả dạng prefix: !qr
 
 client.login(TOKEN);
 extra.init(client, supabase); // bật các lệnh mở rộng
-require('./daily-guild').init(client, supabase); // đọc kênh Daily Guild -> bảng daily_guild cho web
+rel.init(client, supabase, extra.helpers); // bật relationship
+rel.registerPrefix(extra.prefixCommands);  // j!rel ...
+rel.setShowcase(async (spec) => { // nút "Khoe lên kênh" trong bot: đăng bài layout + thread (không ping)
+  const ch = await getChannel();
+  return ch ? postRelShowcase(ch, spec) : null;
+});
 
 // ===== ĐĂNG TỔNG KẾT / WORKSHOP / VÀNG / DANH THIẾP LÊN DISCORD (LAYOUT) =====
 const {
@@ -414,6 +421,43 @@ async function sendCard(channel, row) {
   await openThread(sent, 'Danh thiếp của người chơi', row, 'danh thiếp của bạn đã được đăng, mọi người cùng trò chuyện ở đây nhé!');
 }
 
+// ---------- 4. RELATIONSHIP: card + sơ đồ (từ game hoặc nút trong bot) ----------
+// Thread của relationship KHÔNG ping và không gắn mention: chỉ ghi tên thường.
+async function openThreadQuiet(msg, title, note) {
+  try {
+    const thread = await msg.startThread({
+      name: clip(title, 100) || 'Relationship',
+      autoArchiveDuration: 1440,
+      reason: 'Justaseed: thread cho bài relationship',
+    });
+    await thread.send({ content: clip(note, 1800), allowedMentions: { parse: [], users: [], roles: [] } });
+  } catch (e) {
+    console.error('Không tạo được thread relationship:', e.message);
+  }
+}
+async function postRelShowcase(channel, spec) {
+  const files = [new SummaryAttachment(spec.png, { name: spec.file })];
+  const container = new SummaryContainer();
+  container.addTextDisplayComponents(new SummaryText().setContent(`### ${EM.title} ${clip(spec.title, 200)} ${EM.title}`));
+  container.addTextDisplayComponents(new SummaryText().setContent(spec.lines.map((l, k) => `${k % 2 ? EM.b : EM.a} ${l}`).join('\n').slice(0, 1800)));
+  container.addSeparatorComponents(new SummarySeparator());
+  container.addMediaGalleryComponents(new SummaryGallery().addItems(new SummaryGalleryItem().setURL('attachment://' + spec.file)));
+  addFooter(container, Math.floor(Date.now() / 1000));
+  const sent = await channel.send({
+    components: [container],
+    files,
+    flags: SummaryFlags.IsComponentsV2,
+    allowedMentions: { parse: [] }, // mention chỉ hiển thị tên, không ping
+  });
+  await openThreadQuiet(sent, spec.threadTitle, spec.threadNote);
+  return sent;
+}
+async function sendRelShare(channel, row) {
+  const spec = await rel.specFromShare(row, toBuf(row.image));
+  if (!spec) throw new Error('Không dựng được bài relationship (người gửi không thuộc cặp hoặc relationship không còn)');
+  return postRelShowcase(channel, spec);
+}
+
 async function postShares() {
   // đang đăng thì đánh dấu để chạy lại ngay sau đó, không bỏ sót bài mới
   if (postingShares) { sharesAgain = true; return; }
@@ -436,6 +480,7 @@ async function postShares() {
         if (row.kind === 'workshop') await sendWorkshop(channel, row);
         else if (row.kind === 'gold') await sendGold(channel, row);
         else if (row.kind === 'card') await sendCard(channel, row);
+        else if (row.kind === 'relcard' || row.kind === 'relmap') await sendRelShare(channel, row);
         else console.error('Loại share lạ:', row.kind);
         console.log('Đã đăng', row.kind, 'id', row.id);
       } catch (err) {

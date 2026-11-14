@@ -81,6 +81,11 @@ function refreshLinks() {
   })().finally(() => { linkLoading = null; });
   return linkLoading;
 }
+// ngược lại: từ id tài khoản game -> Discord ID (dựa trên bộ nhớ đệm liên kết)
+function discordIdOf(uid) {
+  for (const [d, u] of linkCache) if (u === uid) return d;
+  return null;
+}
 async function userIdOf(discordId) {
   discordId = String(discordId);
   if (linkCache.has(discordId)) return linkCache.get(discordId);
@@ -735,6 +740,7 @@ function prefixCtx(msg, commandName, o = {}) {
   };
   const ctx = {
     commandName, user: msg.author, member: msg.member, guild: msg.guild, channel: msg.channel,
+    msg, args: o.args || [],
     deferred: false, replied: false,
     options: {
       getUser: (n) => (o.users || {})[n] || null,
@@ -782,6 +788,7 @@ function helpPages() {
         `${EM.card} **Tiền & chuyển khoản** — số dư, chuyển tiền`,
         `${EM.shop} **Gian hàng** — mở bán, nhập hàng, thuê nhân viên`,
         `${EM.ws} **Tiến độ** — workshop, gia công vàng`,
+        `💞 **Relationship** — card, sơ đồ, điểm danh cùng nhau, nhiệm vụ`,
         `${EM.tip} **Lưu ý** — liên kết tài khoản, tin nhắn riêng`,
       ].join('\n'),
     },
@@ -820,6 +827,19 @@ function helpPages() {
         `${a} **\`${p}workshop\`** · \`/workshop\`\nXem tiến độ các mẻ workshop đang làm.`,
         `${b} **\`${p}vang\`** · \`/vang\`\nXem tiến độ gia công vàng ở Tiệm vàng.`,
         `${EM.refresh} Bấm nút **Làm mới** dưới tin nhắn để cập nhật tiến độ.`,
+      ].join('\n\n'),
+    },
+    rel: {
+      label: 'Relationship', desc: 'Card, sơ đồ, điểm danh, nhiệm vụ', emoji: '💞',
+      title: 'Relationship', ico: '💞',
+      body: [
+        `${a} Tạo relationship trong game: **Cộng đồng → Bạn bè**, bấm nút 💞 cạnh một người bạn, chọn loại (bạn thân, anh em, chị em, iu dấu, lốp xe tăng...) rồi chờ bạn ấy chấp nhận.`,
+        `${b} **\`${p}rel card [@người]\`** · \`/relationship card\`\nXem card relationship: ảnh hai người, biểu tượng + tên loại, số ngày bên nhau, cấp và thanh XP.`,
+        `${a} **\`${p}rel sodo\`** · \`/relationship sodo\`\nXem sơ đồ các relationship của bạn.`,
+        `${b} **\`${p}rel daily [@người]\`** · \`/relationship daily\`\nĐiểm danh cùng nhau. Hai người cùng điểm danh trong ngày sẽ nhận thêm XP và giữ chuỗi.`,
+        `${a} **\`${p}rel nhiemvu [@người]\`** · \`/relationship nhiemvu\`\nXem nhiệm vụ ngày/tuần của relationship và nhận thưởng XP.`,
+        `${b} **\`${p}rel ds\`** — danh sách relationship của bạn.`,
+        `${EM.tip} XP còn tăng khi **tặng quà**, **mua đồ ở sạp của nhau**, **ký tường**, **thăm nhà** (làm trong game). Bấm **Khoe lên kênh** để đăng card hoặc sơ đồ lên kênh chung.`,
       ].join('\n\n'),
     },
     tips: {
@@ -920,7 +940,7 @@ async function onMessage(msg) {
         }
         o.ints = { nhacungcap: si, soluong: q }; o.strings = { mathang: id };
       } else return usage(`Lệnh con: \`trangthai\`, \`mo\`, \`nhaphang\`, \`thuenv\`. Xem \`${PREFIX}help\`.`);
-    } else if (prefixCommands[cmd]) { name = cmd; run = prefixCommands[cmd]; }
+    } else if (prefixCommands[cmd]) { name = cmd; run = prefixCommands[cmd]; o.args = args; }
     else return;
 
     const ctx = prefixCtx(msg, name, o);
@@ -942,4 +962,8 @@ function init(discordClient, sb) {
   client.once('ready', () => refreshLinks().then(() => console.log(`[extra] đã nạp ${linkCache.size} tài khoản liên kết`)).catch(e => console.error('[extra]', e.message)));
 }
 
-module.exports = { commands, init, prefixCommands, PREFIX };
+// hàm dùng chung cho các module mở rộng khác (relationship.js)
+const helpers = {
+  userIdOf, discordIdOf, layout, H, EM, linkRow, stamp, say, clip, V2, E, NOT_LINKED, parseGav, PREFIX,
+};
+module.exports = { commands, init, prefixCommands, PREFIX, helpers };
