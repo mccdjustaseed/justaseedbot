@@ -2,6 +2,7 @@ require('dotenv').config();
 
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, AttachmentBuilder } = require('discord.js');
 const { createClient } = require('@supabase/supabase-js');
+const extra = require('./extra-commands'); // lệnh mở rộng: profile, daily, tiền, chuyển tiền, tiến độ, gian hàng
 
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
@@ -18,7 +19,8 @@ const commands = [
   new SlashCommandBuilder()
     .setName('qr')
     .setDescription('Nhận QR khôi phục tiến trình Justaseed')
-    .toJSON()
+    .toJSON(),
+  ...extra.commands
 ];
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
@@ -27,7 +29,7 @@ client.once('ready', async () => {
   console.log('Bot online: ' + client.user.tag);
   try {
     await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-    console.log('Đã đăng ký lệnh /qr');
+    console.log('Đã đăng ký lệnh: ' + commands.map(c => '/' + c.name).join(' '));
   } catch (e) {
     console.error(e);
   }
@@ -76,6 +78,7 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 client.login(TOKEN);
+extra.init(client, supabase); // bật các lệnh mở rộng
 
 // ===== ĐĂNG TỔNG KẾT / WORKSHOP / VÀNG / DANH THIẾP LÊN DISCORD (LAYOUT) =====
 const {
