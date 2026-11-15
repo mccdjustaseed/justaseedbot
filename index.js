@@ -6,6 +6,9 @@ const { createClient } = require('@supabase/supabase-js');
 const extra = require('./extra-commands'); // lệnh mở rộng: profile, daily, tiền, chuyển tiền, tiến độ, gian hàng
 const rel = require('./relationship'); // hệ thống relationship: card, sơ đồ, điểm danh, nhiệm vụ
 const afk = require('./afk'); // lệnh /afk, j!afk: báo vắng mặt (2 type)
+const gc = require('./game-cmds'); // giá bán, nâng cấp, nhiệm vụ, thú cưng, ngân hàng, nhân viên, túi đồ, thống kê
+const khoe = require('./khoe'); // /khoe: ảnh khoe ngay trên bot
+const terms = require('./terms'); // điều khoản sử dụng + tự tạo tài khoản cho người chưa từng chơi web
 const bp = require('./bot-profile'); // lệnh đổi trạng thái / avatar / bìa của bot (cần quyền Quản lý máy chủ)
 
 const TOKEN = process.env.TOKEN;
@@ -25,9 +28,11 @@ const commands = [
     .setDescription('Nhận QR khôi phục tiến trình Justaseed')
     .toJSON(),
   ...extra.commands,
+  ...khoe.commands,
   ...rel.commands,
   ...bp.commands,
-  ...afk.commands
+  ...afk.commands,
+  ...gc.commands
 ];
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
@@ -93,13 +98,22 @@ client.on('interactionCreate', (interaction) => {
 extra.prefixCommands.qr = cmdQr; // dùng được cả dạng prefix: !qr
 
 client.login(TOKEN);
+try { require('./headless').warmup(); } catch (e) { /* chưa cài playwright */ } // mở sẵn trình duyệt ẩn
 extra.init(client, supabase); // bật các lệnh mở rộng
+khoe.init(client, supabase, extra.helpers);
+khoe.registerPrefix(extra.prefixCommands); // j!khoe
+terms.init(client, supabase, extra.helpers); // bảng điều khoản sử dụng
+terms.install(client); // chặn người chưa đồng ý trước khi tới mọi module lệnh
 rel.init(client, supabase, extra.helpers); // bật relationship
 rel.registerPrefix(extra.prefixCommands);  // j!rel ...
 bp.init(client, extra.helpers); // bật lệnh /bot
 bp.registerPrefix(extra.prefixCommands); // j!bot ...
 afk.init(client, extra.helpers); // bật AFK
 afk.registerPrefix(extra.prefixCommands); // j!afk [lời nhắn]
+gc.init(client, extra.helpers); // lệnh quản lý tiệm
+gc.registerPrefix(extra.prefixCommands); // j!giaban, j!nangcap, ...
+const levels = require('./levels'); levels.init(client, supabase, extra.helpers); levels.registerPrefix(extra.prefixCommands); // xp khi chat + j!rank
+const gamble = require('./gamble'); gamble.init(client, supabase, extra.helpers); gamble.registerPrefix(extra.prefixCommands); // j!cf, j!slots, j!tx
 require('./tuoi-cay').init(client, supabase); // đọc kênh Tưới cây -> bảng tuoi_cay (web: Sky > Tưới cây)
 rel.setShowcase(async (spec) => { // nút "Khoe lên kênh" trong bot: đăng bài layout + thread (không ping)
   const ch = await getChannel();
@@ -517,7 +531,7 @@ supabase
 setInterval(() => {
   if (!client.isReady()) return;
   postShares();
-}, 5000);
+}, 15000);
 
 setInterval(() => {
   if (!client.isReady()) return console.log('[summary] bot chưa ready');
@@ -618,7 +632,7 @@ supabase.channel('role_purchases_rt')
   .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'role_purchases' },
     () => { if (client.isReady()) grantRoles(); })
   .subscribe((st) => console.log('[roles] realtime:', st));
-setInterval(() => { if (client.isReady()) grantRoles(); }, 10000);
+setInterval(() => { if (client.isReady()) grantRoles(); }, 60000); // đã có realtime, chỉ là dự phòng
 // ===== HẾT =====
 
 // ===== ĐỒNG BỘ DANH SÁCH ROLE SERVER -> bảng guild_roles (để tab Quản trị chọn role) =====

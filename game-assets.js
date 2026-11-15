@@ -20,7 +20,7 @@ mdon:'<circle cx=20 cy=14 r=10.5 fill="#ff7eb6"/><circle cx=20 cy=14 r=7 fill="#
 lan:pet(5,4,6,5.5,'#efe3ff')+'<circle cx=20 cy=14 r=3 fill="#b04bd8"/>'};
 const fw=(id,w=40)=>`<svg width=${w} height=${w} viewBox="0 0 40 40"><path d="M20 22V39" stroke="#4f9d63" stroke-width=3 stroke-linecap=round /><ellipse cx=26 cy=32 rx=5.5 ry=2.5 fill="#6cc07a" transform="rotate(-30 26 32)"/>${FH[id]}</svg>`;
 
-return { fw };
+return { fw, has: (id) => Object.prototype.hasOwnProperty.call(FH, id) };
 })();
 
 // ---- bộ icon thay emoji (D / K / svg) ----
@@ -229,6 +229,7 @@ return { jsvg };
 })();
 
 module.exports = {
+  flowerSvg: (id, w) => (FLOWER.has(id) ? FLOWER.fw(id, w || 64) : null), // null nếu game chưa có hình hoa này
   iconSvg: ICONS.svg, ICON_RE: ICONS.RE, ICON_KEYS: ICONS.K,
   wsItemSvg: (it) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-16 -34 32 37" width="320" height="370">${WS.frag(it)}</svg>`,
   goldSvg: (o) => GOLD.jsvg(o),

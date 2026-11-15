@@ -5,7 +5,7 @@
 // - Avatar / emoji / font đều được cache để lần vẽ sau nhanh hơn
 const fs = require('fs');
 const path = require('path');
-const { iconSvg, ICON_RE, wsItemSvg, goldSvg } = require('./game-assets');
+const { iconSvg, ICON_RE, wsItemSvg, goldSvg, flowerSvg } = require('./game-assets');
 
 const FONT = '"Baloo 2", "Onest", "DejaVu Sans", "Noto Sans", sans-serif';      // tiêu đề / số
 const FONT_BODY = '"Onest", "Baloo 2", "DejaVu Sans", "Noto Sans", sans-serif'; // chữ thường
@@ -351,7 +351,165 @@ module.exports = function makeRenderer(Cv) {
     return out(c);
   }
 
-  return { renderProfile, renderProgress, renderRow, renderBankCard, imgFrom, themeOf, mix, wsItemSvg, goldSvg };
+
+  // ---------- ảnh "Menu hôm nay": bảng menu trang trí giống hệt trang web (V28 menuBoard) ----------
+  const fl5 = (n, pc, cc, r) => {
+    let o = '';
+    for (let i = 0; i < n; i++) o += `<ellipse cx="0" cy="-${r}" rx="${r * 0.55}" ry="${r * 0.85}" transform="rotate(${i * 360 / n})"/>`;
+    return `<g fill="${pc}" stroke="${cc}" stroke-width="1">${o}</g><circle r="${r * 0.45}" fill="${cc}"/>`;
+  };
+  const MENU_CORNER = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><path d="M3 62C3 30 18 8 62 3" fill="none" stroke="#4f9d63" stroke-width="2" stroke-linecap="round"/>' +
+    '<g fill="#6cc07a" stroke="#3f8452" stroke-width=".7"><ellipse cx="12" cy="38" rx="6" ry="2.6" transform="rotate(-62 12 38)"/><ellipse cx="22" cy="22" rx="6" ry="2.6" transform="rotate(-40 22 22)"/><ellipse cx="40" cy="10" rx="6" ry="2.6" transform="rotate(-15 40 10)"/></g>' +
+    `<g transform="translate(15 15)">${fl5(6, '#ff9ec7', '#e0538f', 6)}</g><g transform="translate(40 8) scale(.8)">${fl5(5, '#ffffff', '#f2a33a', 5)}</g><g transform="translate(8 40) scale(.8)">${fl5(5, '#c9a7f0', '#8f4fb3', 5)}</g></svg>`;
+  // hoa chưa có hình trong game: vẽ bông hoa chung, màu theo mã hoa
+  function genericFlower(id) {
+    const h = [...String(id)].reduce((a, ch) => (a * 31 + ch.charCodeAt(0)) % 360, 7) / 360;
+    const f = (n) => { const k = (n + h * 12) % 12, a = 0.7 * Math.min(0.62, 1 - 0.62); return Math.round(255 * (0.62 - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)))).toString(16).padStart(2, '0'); };
+    const col = `#${f(0)}${f(8)}${f(4)}`;
+    let pet = '';
+    for (let i = 0; i < 6; i++) pet += `<ellipse cx="20" cy="7" rx="4.2" ry="6" fill="${col}" transform="rotate(${i * 60} 20 14)"/>`;
+    return `<svg viewBox="0 0 40 40"><path d="M20 22V39" stroke="#4f9d63" stroke-width="3" stroke-linecap="round"/><ellipse cx="26" cy="32" rx="5.5" ry="2.5" fill="#6cc07a" transform="rotate(-30 26 32)"/>${pet}<circle cx="20" cy="14" r="3.5" fill="#ffd766"/></svg>`;
+  }
+  const kfmt = (v) => (v % 1000 === 0 ? `${v / 1000}k` : vnd(v));
+  const SERIF = 'Georgia, "DejaVu Serif", "Noto Serif", serif';
+
+  // rows: [{ id, name, z: { S:{n,price}, M:{...}, L:{...} } }] (engine.menuRows); opt.tag: dòng nhỏ phía trên tiêu đề
+  async function renderMenu(s, rows, opt = {}) {
+    const T = themeOf(s), W = 960, RH = 86, HEAD = 292, FOOT = 78;
+    const n = rows.length, body0 = n ? n * RH : 120;
+    const H = HEAD + body0 + FOOT;
+    const { c, ctx } = mk(W, H);
+    page(ctx, W, H, T);
+    const bx = 30, by = 30, bw = W - 60, bh = H - 60;
+    const pk = T.dark ? '#7a3552' : '#f4a9c4', pink = T.dark ? '#ff8fb0' : '#c43a66';
+
+    // khung bảng: nền thẻ + chấm lưới + viền đôi (viền màu chủ đề, viền hồng ngoài)
+    rr(ctx, bx - 8, by - 8, bw + 16, bh + 16, 52, null, pk, 4);
+    ctx.save(); rr(ctx, bx, by, bw, bh, 44); ctx.clip();
+    ctx.fillStyle = T.card; ctx.fillRect(bx, by, bw, bh);
+    ctx.fillStyle = T.ln;
+    for (let y = by + 12; y < by + bh; y += 24) for (let x = bx + 12; x < bx + bw; x += 24) { ctx.beginPath(); ctx.arc(x, y, 1.7, 0, Math.PI * 2); ctx.fill(); }
+    ctx.restore();
+    rr(ctx, bx, by, bw, bh, 44, null, T.border, 5);
+
+    // 4 góc hoa lá
+    const cimg = await svgImage(MENU_CORNER, 256, 256), CS = 124;
+    if (cimg) for (const [fx, fy] of [[1, 1], [-1, 1], [1, -1], [-1, -1]]) {
+      ctx.save();
+      ctx.translate(fx > 0 ? bx : bx + bw, fy > 0 ? by : by + bh); ctx.scale(fx, fy);
+      ctx.drawImage(cimg, -6, -6, CS, CS);
+      ctx.restore();
+    }
+
+    // tiêu đề
+    const cx = W / 2;
+    await body(ctx, (opt.tag ? `JUSTASEED · ${String(opt.tag).toUpperCase()}` : 'JUSTASEED'), cx, by + 62, 21, T.mut, 700, 'center', bw - 300);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    ctx.font = `italic 700 68px ${SERIF}`;
+    ctx.fillStyle = T.dark ? '#7a3552' : '#f4b6cc'; ctx.fillText('Menu hôm nay', cx + 3, by + 140 + 3);
+    ctx.fillStyle = T.g3; ctx.fillText('Menu hôm nay', cx, by + 140);
+    if (n) {
+      const label = `${n} MÓN`; ctx.font = `800 24px ${FONT}`;
+      const pw = ctx.measureText(label).width + 44;
+      rr(ctx, cx - pw / 2, by + 160, pw, 40, 20, '#e0567f');
+      ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.fillText(label, cx, by + 188);
+    }
+
+    // cột: icon | tên | S | M | L
+    const x0 = bx + 40, x1 = bx + bw - 40, colX = [x1 - 300, x1 - 150, x1], ZS = [['S', '3 bông'], ['M', '5 bông'], ['L', '10 bông']];
+    const hy = by + 236;
+    for (let k = 0; k < 3; k++) {
+      await rich(ctx, ZS[k][0], colX[k] - 70, hy, 34, T.g3, 800, 'center');
+      await body(ctx, ZS[k][1], colX[k] - 70, hy + 22, 16, T.mut, 600, 'center');
+    }
+    ctx.strokeStyle = T.border; ctx.lineWidth = 2;
+    for (const dy of [34, 38]) { ctx.beginPath(); ctx.moveTo(x0, hy + dy); ctx.lineTo(x1, hy + dy); ctx.stroke(); }
+
+    if (!n) {
+      await body(ctx, 'Chưa có món. Cần đủ hoa (S=3, M=5, L=10 bông) và giấy gói.', cx, hy + 100, 24, T.mut, 600, 'center', bw - 100);
+    }
+    for (let i = 0; i < n; i++) {
+      const r = rows[i], y = hy + 46 + i * RH;
+      const pic = await svgImage(flowerSvg(r.id, 64) || genericFlower(r.id), 128, 128);
+      if (pic) ctx.drawImage(pic, x0 + 4, y + 8, 62, 62);
+      await rich(ctx, r.name, x0 + 84, y + 50, 31, T.ink, 800, 'left', colX[0] - 70 - 150 - (x0 + 84) + 70);
+      for (let k = 0; k < 3; k++) {
+        const z = r.z[ZS[k][0]], px = colX[k] - 70;
+        if (z) {
+          await rich(ctx, kfmt(z.price), px, y + 42, 32, pink, 800, 'center', 130);
+          await body(ctx, `còn ${z.n}`, px, y + 66, 17, T.mut, 600, 'center');
+        } else await rich(ctx, '–', px, y + 48, 30, T.ln, 700, 'center');
+      }
+      if (i < n - 1) {
+        ctx.save(); ctx.setLineDash([3, 8]); ctx.lineWidth = 2; ctx.strokeStyle = T.ln;
+        ctx.beginPath(); ctx.moveTo(x0, y + RH - 4); ctx.lineTo(x1, y + RH - 4); ctx.stroke(); ctx.restore();
+      }
+    }
+    await body(ctx, 'Giá theo nghìn đồng (k) · Khách có thể gọi bó mix 2 loại hoa', cx, by + bh - 34, 19, T.mut, 600, 'center', bw - 120);
+    return out(c);
+  }
+
+  // PNG 128x128 của một loài hoa (hình trong game, chưa có thì bông hoa chung) — dùng làm emoji của bot
+  async function flowerPng(id) {
+    const img = await svgImage(flowerSvg(id, 64) || genericFlower(id), 128, 128);
+    if (!img) return null;
+    const c = Cv.createCanvas(128, 128), ctx = c.getContext('2d');
+    ctx.drawImage(img, 0, 0, 128, 128);
+    return c.toBuffer('image/png');
+  }
+
+  // PNG 128x128 của một icon trong bộ icon game (dùng làm emoji của bot); không có icon thì null
+  async function iconPng(ch, color = '#4f9d63') {
+    const img = await emojiImg(ch, color);
+    if (!img) return null;
+    const c = Cv.createCanvas(128, 128), ctx = c.getContext('2d');
+    ctx.drawImage(img, 8, 8, 112, 112);
+    return c.toBuffer('image/png');
+  }
+
+  // ---------- ảnh ngang dài: tiến trình thăng cấp (chat server / j!rank) ----------
+  // p: { s, avatar, name, lv, xpIn, xpNeed, title, fr, afr, up, gain, sub }
+  async function renderLevel(p) {
+    const T = themeOf(p.s), W = 1000, H = 260;
+    const { c, ctx } = mk(W, H);
+    page(ctx, W, H, T);
+    const hx = 28, hy = 28, hw = W - 56, hh = H - 56;
+    ctx.save(); rr(ctx, hx, hy, hw, hh, 36); ctx.clip();
+    ctx.fillStyle = grad160(ctx, hx, hy, hw, hh, T.g, T.card); ctx.fillRect(hx, hy, hw, hh);
+    if (p.up) { // hạt confetti khi vừa lên cấp
+      const cols = [T.col, T.gold, mix(T.col, '#ffffff', 0.5), '#ff8fb3', '#ffd166'];
+      for (let k = 0; k < 46; k++) {
+        const x = hx + ((k * 97 + 31) % hw), y = hy + ((k * 53 + 11) % hh), r = 3 + (k % 4);
+        ctx.globalAlpha = 0.55; ctx.fillStyle = cols[k % cols.length];
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+    ctx.restore();
+    rr(ctx, hx, hy, hw, hh, 36, null, T.border, 2);
+
+    avatar(ctx, p.avatar, 140, H / 2, 62, T, p.fr, p.afr);
+    const x0 = 250, xr = W - 56;
+    if (p.up) {
+      const label = 'LÊN CẤP!'; ctx.font = `800 22px ${FONT}`;
+      const tw = ctx.measureText(label).width + 36;
+      rr(ctx, x0, 52, tw, 38, 19, T.col, null);
+      await body(ctx, label, x0 + tw / 2, 79, 22, '#ffffff', 800, 'center');
+    } else await body(ctx, p.sub || 'Tiến trình cấp độ', x0, 78, 22, T.mut, 600, 'left', 420);
+    await rich(ctx, p.name, x0, 134, 42, T.ink, 800, 'left', 470);
+    await body(ctx, p.title || '', x0, 168, 22, T.mut, 600, 'left', 470);
+
+    await body(ctx, 'CẤP', xr, 82, 22, T.mut, 700, 'right');
+    await rich(ctx, String(p.lv), xr, 146, 70, T.g3, 800, 'right', 220);
+
+    const bx = x0, bw = xr - x0, by = 192;
+    bar(ctx, bx, by, bw, 16, p.xpIn / Math.max(1, p.xpNeed), T.col, mix(T.col, '#ffffff', 0.25), T.card);
+    await body(ctx, `${Math.round(p.xpIn).toLocaleString('vi-VN')}/${Math.round(p.xpNeed).toLocaleString('vi-VN')} XP`, xr, by + 42, 20, T.mut, 600, 'right');
+    if (p.gain) await body(ctx, `+${p.gain} XP`, bx, by + 42, 20, T.g3, 700, 'left');
+    return out(c);
+  }
+
+  return { renderLevel, renderProfile, renderProgress, renderRow, renderBankCard, renderMenu, flowerPng, iconPng, imgFrom, themeOf, mix, wsItemSvg, goldSvg };
 };
 module.exports.themeOf = themeOf;
 module.exports.mix = mix;
